@@ -45,12 +45,13 @@
         .polar-display { color: #00ffcc; font-weight: bold; display: flex; align-items: center; gap: 10px;}
         .train-controls { display: flex; align-items: center; gap: 10px; }
 
-        #video-container { position: relative; width: 100%; max-width: 400px; margin: 15px auto; border: 2px solid #444; border-radius: 10px; overflow: hidden; background: #000; }
-        video { width: 100%; transform: scaleX(-1); display: block; }
+        /* 影片容器：必須是 flex 才能完美貼合比例 */
+        #video-container { position: relative; width: 100%; max-width: 400px; margin: 15px auto; border: 2px solid #444; border-radius: 10px; overflow: hidden; background: #000; display: flex; line-height: 0; }
+        video { width: 100%; height: auto; transform: scaleX(-1); display: block; object-fit: cover; }
 
-        /* 追蹤方框 - 預設隱藏，由程式動態控制 */
-        #target-box { position: absolute; border: 2px solid #00ffcc; box-sizing: border-box; pointer-events: none; border-radius: 10px; transition: all 0.1s ease-out; display: none;}
-        #target-hint { position: absolute; bottom: 10px; left: 0; width: 100%; text-align: center; background: rgba(0,0,0,0.6); color: #fff; padding: 5px 0; font-size: 0.85em; pointer-events: none; }
+        /* 動態追蹤方框 - 加入陰影與流暢過渡效果 */
+        #target-box { position: absolute; border: 3px solid #00ffcc; box-sizing: border-box; pointer-events: none; border-radius: 8px; transition: all 0.1s linear; display: none; box-shadow: 0 0 10px rgba(0, 255, 204, 0.5); z-index: 10;}
+        #target-hint { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.7); color: #fff; padding: 5px 15px; font-size: 0.85em; border-radius: 15px; pointer-events: none; white-space: nowrap; z-index: 10; }
 
         .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; max-width: 400px; padding: 0 15px; margin-bottom: 20px;}
         .stat-box { background: #1e1e1e; padding: 15px; border-radius: 10px; text-align: center; }
@@ -151,7 +152,7 @@
         <div id="video-container">
             <video id="webcam" autoplay playsinline></video>
             <div id="target-box"></div>
-            <div id="target-hint">⚠️ 請將臉部靠近鏡頭</div>
+            <div id="target-hint">⚠️ 等待影像載入中...</div>
             <canvas id="hidden-canvas" style="display:none;"></canvas>
         </div>
 
@@ -311,7 +312,6 @@
             }
         }
 
-        // 訓練倒數邏輯
         function startTrainingTimer() {
             if(polarBpm === 0) { alert("請先確認 Polar 心跳帶已連線並抓到數據！"); return; }
             const sel = document.getElementById('train-time');
@@ -348,16 +348,23 @@
             document.getElementById('train-countdown').style.display = 'none';
         }
 
-        // 臉部辨識回調
+        // 解析 MediaPipe 回傳的安全防護機制
         function onFaceDetected(results) {
-            if (results.detections.length > 0) {
+            if (results.detections && results.detections.length > 0) {
                 const bbox = results.detections[0].boundingBox;
-                // 鎖定額頭區域
+
+                // 修正部分手機 xMin/yMin 為 undefined 的 Bug，自動透過 Center 換算
+                let width = bbox.width || 0.5;
+                let height = bbox.height || 0.5;
+                let xMin = bbox.xMin !== undefined ? bbox.xMin : (bbox.xCenter - width / 2);
+                let yMin = bbox.yMin !== undefined ? bbox.yMin : (bbox.yCenter - height / 2);
+
+                // 額頭區域：臉部上方 1/4，寬度為臉部 1/2
                 currentForeheadROI = {
-                    x: bbox.xMin + bbox.width * 0.25,
-                    y: bbox.yMin,
-                    w: bbox.width * 0.5,
-                    h: bbox.height * 0.25
+                    x: xMin + width * 0.25,
+                    y: yMin,
+                    w: width * 0.5,
+                    h: height * 0.25
                 };
             } else {
                 currentForeheadROI = null;
@@ -377,30 +384,33 @@
             const canvas = document.getElementById('hidden-canvas');
             const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
-            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+            if (video.readyState >= 2 && video.videoWidth > 0) {
                 frameCount++;
-                if (frameCount % 5 === 0 && faceDetector) {
-                    faceDetector.send({image: video}).catch(e => console.log(e));
-                }
 
+                // 為了破解 iOS/Safari 的嚴格限制，強制將 Video 繪製到 Canvas，再丟給 AI 辨識
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                if (frameCount % 5 === 0 && faceDetector) {
+                    // 使用 Canvas 傳給 MediaPipe，而不是直接傳送 video
+                    faceDetector.send({image: canvas}).catch(e => console.log("MediaPipe Error: ", e));
+                }
 
                 const boxElement = document.getElementById('target-box');
                 const hintElement = document.getElementById('target-hint');
 
                 if (currentForeheadROI) {
-                    // === 臉部抓取成功：顯示方框並進行資料擷取 ===
-                    let rx = currentForeheadROI.x * canvas.width;
-                    let ry = currentForeheadROI.y * canvas.height;
-                    let rw = currentForeheadROI.w * canvas.width;
-                    let rh = currentForeheadROI.h * canvas.height;
+                    // === 臉部抓取成功：計算真實像素與安全邊界 ===
+                    let rx = Math.floor(currentForeheadROI.x * canvas.width);
+                    let ry = Math.floor(currentForeheadROI.y * canvas.height);
+                    let rw = Math.floor(currentForeheadROI.w * canvas.width);
+                    let rh = Math.floor(currentForeheadROI.h * canvas.height);
 
                     rx = Math.max(0, rx); ry = Math.max(0, ry);
                     rw = Math.min(canvas.width - rx, rw); rh = Math.min(canvas.height - ry, rh);
 
-                    // 畫面上鏡像反轉的方框計算
+                    // 畫面上鏡像反轉的方框計算 (因 CSS scaleX(-1) 左右顛倒)
                     let boxLeft = (1 - (currentForeheadROI.x + currentForeheadROI.w)) * 100;
                     boxElement.style.left = boxLeft + '%';
                     boxElement.style.top = (currentForeheadROI.y * 100) + '%';
@@ -411,39 +421,47 @@
                     hintElement.innerText = "✅ 額頭鎖定中";
                     hintElement.style.color = "#00ffcc";
 
-                    // 擷取影像資料並放入運算緩衝區
-                    const frameData = ctx.getImageData(rx, ry, rw, rh).data;
-                    let r=0, g=0, b=0;
-                    for(let i=0; i<frameData.length; i+=4) {
-                        r += frameData[i]; g += frameData[i+1]; b += frameData[i+2];
+                    // 確保範圍大於 0 才擷取影像，避免系統當機
+                    if (rw > 0 && rh > 0 && !isNaN(rx) && !isNaN(ry)) {
+                        try {
+                            const frameData = ctx.getImageData(rx, ry, rw, rh).data;
+                            let r=0, g=0, b=0;
+                            for(let i=0; i<frameData.length; i+=4) {
+                                r += frameData[i]; g += frameData[i+1]; b += frameData[i+2];
+                            }
+                            const count = frameData.length / 4;
+                            if(count > 0) rgbBuffer.push([r/count, g/count, b/count]);
+                        } catch (e) {
+                            console.error("影像擷取錯誤:", e);
+                        }
                     }
-                    const count = frameData.length / 4;
-                    if(count > 0) rgbBuffer.push([r/count, g/count, b/count]);
 
                 } else {
                     // === 沒抓到臉：隱藏方框，暫停收集資料 ===
                     boxElement.style.display = 'none';
                     hintElement.innerText = "⚠️ 請將臉部靠近鏡頭";
                     hintElement.style.color = "#ff4d4d";
-                    // 這裡刻意不 push 資料進 rgbBuffer，停止無意義的運算
                 }
 
-                // 確保緩衝區上限
                 if (rgbBuffer.length > 300) {
                     rgbBuffer.shift();
                 }
 
-                // 只有當緩衝區收集夠多，且固定每秒運算一次時才呼叫 Python
+                // 只有當緩衝區收集夠多時，才呼叫 Python (加上防呆機制避免崩潰)
                 if (rgbBuffer.length > 150 && frameCount % 30 === 0) {
-                    const result = pyProcessData(rgbBuffer.flat(), 30.0, polarBpm, currentProfile, isTrainingMode, isTrainingActive).toJs();
+                    try {
+                        const result = pyProcessData(rgbBuffer.flat(), 30.0, polarBpm, currentProfile, isTrainingMode, isTrainingActive).toJs();
 
-                    let outBpm = result.get ? result.get('bpm') : result.bpm;
-                    let outRmssd = result.get ? result.get('rmssd') : result.rmssd;
-                    let outSdnn = result.get ? result.get('sdnn') : result.sdnn;
+                        let outBpm = result.get ? result.get('bpm') : result.bpm;
+                        let outRmssd = result.get ? result.get('rmssd') : result.rmssd;
+                        let outSdnn = result.get ? result.get('sdnn') : result.sdnn;
 
-                    document.getElementById('ai-bpm').innerText = (outBpm > 0) ? outBpm : "--";
-                    document.getElementById('ai-rmssd').innerText = (outRmssd > 0) ? outRmssd : "--";
-                    document.getElementById('ai-sdnn').innerText = (outSdnn > 0) ? outSdnn : "--";
+                        document.getElementById('ai-bpm').innerText = (outBpm > 0) ? outBpm : "--";
+                        document.getElementById('ai-rmssd').innerText = (outRmssd > 0) ? outRmssd : "--";
+                        document.getElementById('ai-sdnn').innerText = (outSdnn > 0) ? outSdnn : "--";
+                    } catch (e) {
+                        console.error("AI 運算錯誤:", e);
+                    }
                 }
 
                 document.getElementById('ai-buffer').innerText = `${rgbBuffer.length} / 300`;
@@ -460,7 +478,7 @@
                 characteristic.addEventListener('characteristicvaluechanged', (e) => {
                     const value = e.target.value;
                     polarBpm = (value.getUint8(0) & 0x1) ? value.getUint16(1, true) : value.getUint8(1);
-                    document.getElementById('polar-bpm').innerText = polarBpm;
+                    document.getElementById('polar-bpm').innerText = polarBpm + " BPM";
                 });
                 document.getElementById('btn-polar').innerText = "✅ 已連線";
                 document.getElementById('btn-polar').style.background = "#00aa00";
