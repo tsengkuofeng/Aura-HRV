@@ -13,9 +13,16 @@ class WebProfileManager:
         p = self.profiles.get(self.current_user)
         if not p or not p.get("trained", False): return
 
+        # 【核心修正 1】限制學習極限：
+        # 強制將學習範圍鎖定在人體膚色的物理極限 (2.5 ~ 3.5 之間)
+        # 避免受室內黃光或螢幕藍光干擾，導致演算法走火入魔
         opt_R = r_mean / g_mean if g_mean > 0 else 3.0
-        p["c_R"] = (p["c_R"] * 0.95) + (opt_R * 0.05)
-        p["baseline_bpm"] = (p["baseline_bpm"] * 0.9) + (bpm_truth * 0.1)
+        opt_R = max(2.5, min(3.5, opt_R))
+
+        # 【核心修正 2】降低學習速率 (原本 0.05 降為 0.01)
+        # 讓光學特徵記憶更平滑，不會因為一次錯誤光線就污染數據
+        p["c_R"] = (p["c_R"] * 0.99) + (opt_R * 0.01)
+        p["baseline_bpm"] = (p["baseline_bpm"] * 0.95) + (bpm_truth * 0.05)
 
 
 engine = WebProfileManager()
@@ -36,7 +43,6 @@ def export_profiles():
 def process_data_from_js(rgb_data, fps, polar_bpm, profile_name, is_training, is_training_active):
     engine.current_user = profile_name
     try:
-        # 【修正 1】確保 Pyodide 的 JS Proxy 完美轉為 Python 陣列
         if hasattr(rgb_data, 'to_py'):
             rgb_data = rgb_data.to_py()
         buffer = np.asarray(rgb_data, dtype=np.float64).reshape(-1, 3)
@@ -46,7 +52,6 @@ def process_data_from_js(rgb_data, fps, polar_bpm, profile_name, is_training, is
 
         R, G, B = buffer[:, 0], buffer[:, 1], buffer[:, 2]
 
-        # 【修正 2】防呆：如果 iOS 阻擋了 Canvas 導致全黑，提早阻斷並報錯
         if np.mean(G) < 1:
             return {"bpm": 0, "rmssd": 0, "sdnn": 0, "error": "影像全黑 (請檢查iOS隱私設定)", "peaks": 0}
 
@@ -62,7 +67,6 @@ def process_data_from_js(rgb_data, fps, polar_bpm, profile_name, is_training, is
 
         nyq = fps / 2.0
 
-        # 【修正 3】放寬濾波器範圍，不再死鎖於 baseline，容忍 45~180 BPM
         low_cut = 0.75 / nyq
         high_cut = 3.0 / nyq
         peak_dist = int(fps * 0.4)
@@ -78,8 +82,7 @@ def process_data_from_js(rgb_data, fps, polar_bpm, profile_name, is_training, is
         b, a = signal.butter(3, [low_cut, high_cut], btype='band')
         f_bvp = signal.filtfilt(b, a, bvp)
 
-        # 【修正 4】大幅降低波峰檢測的敏感度門檻
-        prominence_val = max(np.std(f_bvp) * 0.1, 1e-5)
+        prominence_val = max(np.std(f_bvp) * 0.15, 1e-5)
         peaks, _ = signal.find_peaks(f_bvp, distance=peak_dist, prominence=prominence_val)
 
         bpm, rmssd, sdnn = 0, 0, 0
@@ -88,13 +91,23 @@ def process_data_from_js(rgb_data, fps, polar_bpm, profile_name, is_training, is
             valid_rr = rr[(rr > 300) & (rr < 1500)]
 
             if len(valid_rr) >= 2:
+                # 中位數過濾：剔除太誇張的偏差
                 median_rr = np.median(valid_rr)
-                valid_rr = valid_rr[np.abs(valid_rr - median_rr) < (median_rr * 0.3)]
+                valid_rr = valid_rr[np.abs(valid_rr - median_rr) < (median_rr * 0.2)]
 
                 if len(valid_rr) >= 2:
                     bpm = 60000.0 / np.median(valid_rr)
+
                     if len(valid_rr) > 2:
-                        rmssd = np.sqrt(np.mean(np.diff(valid_rr) ** 2))
+                        # 【核心修正 3】RMSSD 防爆機制
+                        diff_rr = np.abs(np.diff(valid_rr))
+                        # 過濾掉超過 150ms 的相鄰心跳跳變 (在靜止狀態下這幾乎100%是雜訊產生的假波)
+                        clean_diffs = diff_rr[diff_rr < 150]
+                        if len(clean_diffs) > 0:
+                            rmssd = np.sqrt(np.mean(clean_diffs ** 2))
+                        else:
+                            rmssd = 0
+
                     sdnn = np.std(valid_rr)
 
         return {
@@ -105,5 +118,4 @@ def process_data_from_js(rgb_data, fps, polar_bpm, profile_name, is_training, is
             "peaks": len(peaks)
         }
     except Exception as e:
-        # 回傳完整報錯字串給 JS
         return {"bpm": 0, "rmssd": 0, "sdnn": 0, "error": str(traceback.format_exc()), "peaks": 0}
