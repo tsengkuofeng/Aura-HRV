@@ -32,11 +32,10 @@ def export_profiles():
     return json.dumps(engine.profiles)
 
 
-def process_data_from_js(rgb_data, fps, polar_bpm, profile_name, is_training):
+def process_data_from_js(rgb_data, fps, polar_bpm, profile_name, is_training, is_training_active):
     engine.current_user = profile_name
     buffer = np.array(rgb_data).reshape(-1, 3)
 
-    # 將緩衝門檻降為 150 幀 (約 5 秒) 即可開始初步計算
     if len(buffer) < 150:
         return {"bpm": 0, "rmssd": 0, "sdnn": 0}
 
@@ -59,7 +58,10 @@ def process_data_from_js(rgb_data, fps, polar_bpm, profile_name, is_training):
             low_cut = max(0.5, target_hz - 0.25) / nyq
             high_cut = min(3.0, target_hz + 0.25) / nyq
             peak_dist = int(fps / (target_hz + 0.5))
-            engine.update_learning(polar_bpm, np.mean(R), np.mean(G))
+
+            # 只有當倒數計時正在運行時，AI 才進行學習更新
+            if is_training_active:
+                engine.update_learning(polar_bpm, np.mean(R), np.mean(G))
         else:
             base_hz = p["baseline_bpm"] / 60.0
             low_cut = max(0.5, base_hz - 0.5) / nyq

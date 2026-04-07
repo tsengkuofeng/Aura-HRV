@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Aura Pro Web</title>
     <script src="https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js"></script>
     <style>
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         body { background-color: #121212; color: #fff; margin: 0; padding: 0; overflow-x: hidden; }
@@ -17,8 +18,15 @@
         .nav-btn { background: none; border: none; color: #00ffcc; font-size: 1em; cursor: pointer; padding: 10px; }
 
         #screen-disclaimer { justify-content: center; padding: 20px; text-align: center; }
-        .disclaimer-box { background: #1e1e1e; padding: 25px; border-radius: 15px; max-width: 400px; width: 100%; }
-        .btn-primary { background: #00aa00; color: white; border: none; padding: 15px; font-size: 1.1em; border-radius: 8px; width: 100%; margin-top: 15px; font-weight: bold; cursor: pointer;}
+        .disclaimer-box { background: #1e1e1e; padding: 25px; border-radius: 15px; max-width: 500px; width: 100%; display: flex; flex-direction: column; max-height: 90vh;}
+
+        .disclaimer-text { flex-grow: 1; text-align: left; background:#111; padding:15px; border-radius:8px; color: #ccc; font-size: 0.85em; line-height: 1.6; overflow-y: auto; margin-bottom: 15px;}
+        .disclaimer-text h4 { color: #00ffcc; margin: 15px 0 5px 0; font-size: 1.1em;}
+        .disclaimer-text h4:first-child { margin-top: 0; }
+        .disclaimer-text a { color: #00aaff; text-decoration: none; word-break: break-all;}
+        .disclaimer-text a:hover { text-decoration: underline; }
+
+        .btn-primary { background: #00aa00; color: white; border: none; padding: 15px; font-size: 1.1em; border-radius: 8px; width: 100%; font-weight: bold; cursor: pointer;}
         .btn-primary:disabled { background: #555; color: #aaa; }
 
         .carousel-container { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; width: 100%; padding: 40px 20px; gap: 20px; flex-grow: 1; align-items: center; }
@@ -33,13 +41,16 @@
         .profile-item:active { background: #333; }
         .empty-state { text-align: center; color: #777; margin-top: 50px; font-size: 1.1em; }
 
+        .top-info-bar { width: 100%; background: #111; padding: 10px 15px; border-bottom: 1px solid #333; display: flex; align-items: center; justify-content: space-between; font-size: 0.95em;}
+        .polar-display { color: #00ffcc; font-weight: bold; display: flex; align-items: center; gap: 10px;}
+        .train-controls { display: flex; align-items: center; gap: 10px; }
+
         #video-container { position: relative; width: 100%; max-width: 400px; margin: 15px auto; border: 2px solid #444; border-radius: 10px; overflow: hidden; background: #000; }
         video { width: 100%; transform: scaleX(-1); display: block; }
 
-        /* 加入動畫提示使用者將額頭對準 */
-        #target-box { position: absolute; top: 20%; left: 35%; width: 30%; height: 20%; border: 2px dashed #00ffcc; box-sizing: border-box; pointer-events: none; border-radius: 10px; animation: pulse 2s infinite; }
-        @keyframes pulse { 0% { border-color: rgba(0, 255, 204, 0.4); } 50% { border-color: rgba(0, 255, 204, 1); } 100% { border-color: rgba(0, 255, 204, 0.4); } }
-        #target-hint { position: absolute; top: 42%; left: 0; width: 100%; text-align: center; color: rgba(255,255,255,0.7); font-size: 0.8em; pointer-events: none; }
+        /* 追蹤方框 */
+        #target-box { position: absolute; top: 20%; left: 35%; width: 30%; height: 20%; border: 2px dashed rgba(0, 255, 204, 0.4); box-sizing: border-box; pointer-events: none; border-radius: 10px; transition: all 0.2s ease-out; }
+        #target-hint { position: absolute; bottom: 10px; left: 0; width: 100%; text-align: center; background: rgba(0,0,0,0.5); color: #fff; padding: 5px 0; font-size: 0.85em; pointer-events: none; }
 
         .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; max-width: 400px; padding: 0 15px; margin-bottom: 20px;}
         .stat-box { background: #1e1e1e; padding: 15px; border-radius: 10px; text-align: center; }
@@ -50,12 +61,41 @@
 
     <div id="screen-disclaimer" class="screen active">
         <div class="disclaimer-box">
-            <h2 style="color: #00aa00; margin-top: 0;">⚕ Aura HRV</h2>
-            <p style="text-align: left; background:#111; padding:15px; border-radius:8px; color: #ccc; font-size: 0.95em; line-height: 1.5;">
-                【隱私聲明】<br>本系統採本地即時運算，絕不外洩影像。稍後需允許使用攝影機以進行分析。<br><br>
-                【免責聲明】<br>衍生自 pyVHR。數據僅供參考，非醫療診斷之用。
-            </p>
-            <p id="loading-text" style="color: yellow; font-weight: bold;">📥 正在載入 AI 引擎 (約需10秒)...</p>
+            <h2 style="color: #00aa00; margin-top: 0; text-align: center;">⚕ Aura HRV</h2>
+
+            <div class="disclaimer-text">
+                <h4>【衍生作品聲明】</h4>
+                <p>Aura HRV 是基於義大利米蘭大學開源專案 pyVHR 進行二次開發。<br>針對原有的 pyVHR 框架進行了心律變異度(HRV)演算法的改良與功能擴充。</p>
+                <p>參考文獻：<br>
+                @article{Boccignone2025,<br>
+                title = {Enhancing rPPG pulse-signal recovery by facial sampling and PSD Clustering},<br>
+                author = {Giuseppe Boccignone and Donatello Conte and Vittorio Cuculo and Alessandro D’Amelio and Giuliano Grossi and Raffaella Lanzarotti},<br>
+                journal = {Biomedical Signal Processing and Control},<br>
+                volume = {101}, pages = {107158}, year = {2025}, issn = {1746-8094},<br>
+                doi = {<a href="https://doi.org/10.1016/j.bspc.2024.107158" target="_blank">10.1016/j.bspc.2024.107158</a>}<br>
+                }<br><br>
+                @article{boccignone2022,<br>
+                title={pyVHR: a Python framework for remote photoplethysmography},<br>
+                author={Boccignone, Giuseppe et al.},<br>
+                journal={PeerJ Computer Science}, year={2022}, volume={8}, pages={e929},<br>
+                publisher={PeerJ Inc.}<br>
+                }<br><br>
+                @article{Boccignone2020,<br>
+                title = {An Open Framework for Remote-{PPG} Methods and their Assessment},<br>
+                author = {Giuseppe Boccignone et al.},<br>
+                journal = {{IEEE} Access}, pages = {1--1}, year = {2020},<br>
+                doi = {<a href="https://doi.org/10.1109/access.2020.3040936" target="_blank">10.1109/access.2020.3040936</a>}<br>
+                }</p>
+
+                <h4>【授權條款 GPL-3.0】</h4>
+                <p>本專案採用 GPL-3.0 授權，所有使用者皆可自由獲取、修改並散佈本專案之原始碼。</p>
+
+                <h4>【隱私與即時處理說明】</h4>
+                <p>• 無影像儲存：本軟體不會錄製或儲存任何影像資料。<br>
+                • 即時運算：所有生理數據均採即時運算處理，運算完成後即釋放。</p>
+            </div>
+
+            <p id="loading-text" style="color: yellow; font-weight: bold; text-align: center;">📥 正在載入 AI 引擎 (約需10秒)...</p>
             <button id="btn-agree" class="btn-primary" style="display:none;" onclick="switchScreen('screen-home')">✅ 我同意</button>
         </div>
     </div>
@@ -103,14 +143,28 @@
             <button class="nav-btn" id="btn-polar" onclick="connectPolar()" style="background: #333; border-radius: 5px; padding: 5px 10px;">🔗 Polar</button>
         </div>
 
-        <div style="width: 100%; text-align: center; padding: 5px; background: #111; color: #888; font-size: 0.9em;">
-            Polar: <span id="polar-bpm" style="color: #00ffcc; font-weight: bold;">-- BPM</span>
+        <div class="top-info-bar">
+            <div class="polar-display">
+                ❤️ Polar: <span id="polar-bpm">-- BPM</span>
+            </div>
+            <div class="train-controls" id="train-controls-div" style="display: none;">
+                <select id="train-time" style="background:#333; color:white; border:none; padding:5px; border-radius:5px;">
+                    <option value="60">1:00</option>
+                    <option value="120">2:00</option>
+                    <option value="180">3:00</option>
+                    <option value="240">4:00</option>
+                    <option value="300">5:00</option>
+                </select>
+                <button id="btn-start-train" onclick="startTrainingTimer()" style="background:#ff7700; padding:5px 10px; border:none; border-radius:5px; color:white; font-weight:bold; cursor:pointer;">開始訓練</button>
+                <span id="train-countdown" style="display:none; color:yellow; font-weight:bold;"></span>
+                <button id="btn-save-train" onclick="saveTraining()" style="display:none; background:#00aa00; padding:5px 10px; border:none; border-radius:5px; color:white; font-weight:bold; cursor:pointer;">💾 儲存記憶</button>
+            </div>
         </div>
 
         <div id="video-container">
             <video id="webcam" autoplay playsinline></video>
             <div id="target-box"></div>
-            <div id="target-hint">請將額頭對準方框並保持靜止</div>
+            <div id="target-hint">請靠近鏡頭並對準方框</div>
             <canvas id="hidden-canvas" style="display:none;"></canvas>
         </div>
 
@@ -133,10 +187,18 @@
         let localProfiles = {};
         let mediaStream = null;
 
-        // 控制擷取頻率的變數 (非常重要)
+        // 訓練倒數變數
+        let trainTimer = null;
+        let trainSeconds = 0;
+        let isTrainingActive = false;
+
+        // FPS 與臉部追蹤變數
         let lastFrameTime = 0;
         const TARGET_FPS = 30;
         const frameInterval = 1000 / TARGET_FPS;
+        let faceDetector = null;
+        let currentForeheadROI = null;
+        let frameCount = 0;
 
         function switchScreen(screenId) {
             document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -148,6 +210,8 @@
                 mediaStream.getTracks().forEach(t => t.stop());
                 mediaStream = null;
             }
+            if(trainTimer) clearInterval(trainTimer);
+            isTrainingActive = false;
             rgbBuffer = [];
             document.getElementById('ai-buffer').innerText = `0 / 300`;
             switchScreen('screen-home');
@@ -168,6 +232,13 @@
                 pyExportProfiles = pyodideInstance.globals.get('export_profiles');
 
                 if(saved) pySyncProfiles(saved);
+
+                // 初始化 MediaPipe Face Detection
+                faceDetector = new FaceDetection({locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`;
+                }});
+                faceDetector.setOptions({ model: 'short', minDetectionConfidence: 0.5 });
+                faceDetector.onResults(onFaceDetected);
 
                 document.getElementById('loading-text').style.display = 'none';
                 document.getElementById('btn-agree').style.display = 'block';
@@ -226,8 +297,16 @@
             isTrainingMode = trainingFlag;
 
             let modeTitle = (modeName === "Public Mode") ? "一般模式" : modeName;
-            if(isTrainingMode) modeTitle = `訓練中: ${modeName}`;
+            if(isTrainingMode) modeTitle = `訓練模式: ${modeName}`;
             document.getElementById('current-mode-label').innerText = modeTitle;
+
+            // UI 狀態重置
+            document.getElementById('train-controls-div').style.display = isTrainingMode ? 'flex' : 'none';
+            document.getElementById('btn-start-train').style.display = 'inline';
+            document.getElementById('train-time').style.display = 'inline';
+            document.getElementById('train-countdown').style.display = 'none';
+            document.getElementById('btn-save-train').style.display = 'none';
+            isTrainingActive = false;
 
             switchScreen('screen-dashboard');
 
@@ -237,7 +316,7 @@
                 video.srcObject = mediaStream;
                 video.play();
 
-                rgbBuffer = []; // 重置緩衝區
+                rgbBuffer = [];
                 requestAnimationFrame(processFrame);
             } catch (err) {
                 alert("無法存取攝影機：" + err.message);
@@ -245,11 +324,64 @@
             }
         }
 
-        function processFrame(now) {
+        // 訓練倒數邏輯
+        function startTrainingTimer() {
+            if(polarBpm === 0) { alert("請先確認 Polar 心跳帶已連線並抓到數據！"); return; }
+            const sel = document.getElementById('train-time');
+            trainSeconds = parseInt(sel.value);
+            isTrainingActive = true;
+
+            document.getElementById('btn-start-train').style.display = 'none';
+            sel.style.display = 'none';
+            document.getElementById('train-countdown').style.display = 'inline';
+
+            trainTimer = setInterval(() => {
+                trainSeconds--;
+                let m = Math.floor(trainSeconds / 60);
+                let s = trainSeconds % 60;
+                document.getElementById('train-countdown').innerText = `學習中 ${m}:${s.toString().padStart(2, '0')}`;
+
+                if(trainSeconds <= 0) {
+                    clearInterval(trainTimer);
+                    isTrainingActive = false;
+                    document.getElementById('train-countdown').innerText = "訓練完成";
+                    document.getElementById('btn-save-train').style.display = 'inline';
+                }
+            }, 1000);
+        }
+
+        function saveTraining() {
+            const updatedProfilesJson = pyExportProfiles();
+            localStorage.setItem('aura_profiles', updatedProfilesJson);
+            alert("訓練記憶已成功儲存至設備！");
+
+            // 重置 UI
+            document.getElementById('btn-save-train').style.display = 'none';
+            document.getElementById('btn-start-train').style.display = 'inline';
+            document.getElementById('train-time').style.display = 'inline';
+            document.getElementById('train-countdown').style.display = 'none';
+        }
+
+        // 臉部辨識回調
+        function onFaceDetected(results) {
+            if (results.detections.length > 0) {
+                const bbox = results.detections[0].boundingBox;
+                // 鎖定額頭區域: x往右平移一點, y在最上方, 寬度取一半, 高度取上方四分之一
+                currentForeheadROI = {
+                    x: bbox.xMin + bbox.width * 0.25,
+                    y: bbox.yMin,
+                    w: bbox.width * 0.5,
+                    h: bbox.height * 0.25
+                };
+            } else {
+                currentForeheadROI = null;
+            }
+        }
+
+        async function processFrame(now) {
             if (!mediaStream) return;
             requestAnimationFrame(processFrame);
 
-            // 嚴格控制 FPS，避免手機 60Hz/120Hz 讓 AI 濾波器崩潰
             if (!now) now = performance.now();
             const elapsed = now - lastFrameTime;
             if (elapsed < frameInterval) return;
@@ -260,30 +392,67 @@
             const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
             if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                // 每 5 幀將畫面送給 AI 找臉部 (節省效能)
+                frameCount++;
+                if (frameCount % 5 === 0 && faceDetector) {
+                    faceDetector.send({image: video}).catch(e => console.log(e));
+                }
+
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-                const w = canvas.width, h = canvas.height;
-                const roiX = w * 0.35, roiY = h * 0.20, roiW = w * 0.30, roiH = h * 0.20;
+                let rx, ry, rw, rh;
+                const boxElement = document.getElementById('target-box');
+                const hintElement = document.getElementById('target-hint');
 
-                const frameData = ctx.getImageData(roiX, roiY, roiW, roiH).data;
+                if (currentForeheadROI) {
+                    // 自動追蹤模式
+                    rx = currentForeheadROI.x * canvas.width;
+                    ry = currentForeheadROI.y * canvas.height;
+                    rw = currentForeheadROI.w * canvas.width;
+                    rh = currentForeheadROI.h * canvas.height;
+
+                    // 邊界保護
+                    rx = Math.max(0, rx); ry = Math.max(0, ry);
+                    rw = Math.min(canvas.width - rx, rw); rh = Math.min(canvas.height - ry, rh);
+
+                    // 更新畫面上鏡像反轉的方框 (CSS 左邊距 = 100% - (x + w)%)
+                    let boxLeft = (1 - (currentForeheadROI.x + currentForeheadROI.w)) * 100;
+                    boxElement.style.left = boxLeft + '%';
+                    boxElement.style.top = (currentForeheadROI.y * 100) + '%';
+                    boxElement.style.width = (currentForeheadROI.w * 100) + '%';
+                    boxElement.style.height = (currentForeheadROI.h * 100) + '%';
+                    boxElement.style.borderColor = '#00ffcc';
+                    hintElement.innerText = "✅ 額頭鎖定中";
+                    hintElement.style.color = "#00ffcc";
+                } else {
+                    // 備用固定模式
+                    rx = canvas.width * 0.35; ry = canvas.height * 0.10;
+                    rw = canvas.width * 0.30; rh = canvas.height * 0.20;
+
+                    boxElement.style.left = '35%'; boxElement.style.top = '10%';
+                    boxElement.style.width = '30%'; boxElement.style.height = '20%';
+                    boxElement.style.borderColor = 'rgba(0, 255, 204, 0.4)';
+                    hintElement.innerText = "請靠近鏡頭並對準方框";
+                    hintElement.style.color = "#fff";
+                }
+
+                const frameData = ctx.getImageData(rx, ry, rw, rh).data;
                 let r=0, g=0, b=0;
                 for(let i=0; i<frameData.length; i+=4) {
                     r += frameData[i]; g += frameData[i+1]; b += frameData[i+2];
                 }
                 const count = frameData.length / 4;
-                rgbBuffer.push([r/count, g/count, b/count]);
+                if(count > 0) rgbBuffer.push([r/count, g/count, b/count]);
 
                 if (rgbBuffer.length > 300) {
                     rgbBuffer.shift();
                 }
 
-                // 只要緩衝區超過 150 幀 (約5秒) 就開始每秒更新一次資料
                 if (rgbBuffer.length > 150 && rgbBuffer.length % 30 === 0) {
-                    const result = pyProcessData(rgbBuffer.flat(), 30.0, polarBpm, currentProfile, isTrainingMode).toJs();
+                    const result = pyProcessData(rgbBuffer.flat(), 30.0, polarBpm, currentProfile, isTrainingMode, isTrainingActive).toJs();
 
-                    // 安全提取 Pyodide Map 資料
                     let outBpm = result.get ? result.get('bpm') : result.bpm;
                     let outRmssd = result.get ? result.get('rmssd') : result.rmssd;
                     let outSdnn = result.get ? result.get('sdnn') : result.sdnn;
@@ -291,11 +460,6 @@
                     document.getElementById('ai-bpm').innerText = (outBpm > 0) ? outBpm : "--";
                     document.getElementById('ai-rmssd').innerText = (outRmssd > 0) ? outRmssd : "--";
                     document.getElementById('ai-sdnn').innerText = (outSdnn > 0) ? outSdnn : "--";
-
-                    if (isTrainingMode && polarBpm > 30) {
-                        const updatedProfilesJson = pyExportProfiles();
-                        localStorage.setItem('aura_profiles', updatedProfilesJson);
-                    }
                 }
 
                 document.getElementById('ai-buffer').innerText = `${rgbBuffer.length} / 300`;
@@ -312,7 +476,7 @@
                 characteristic.addEventListener('characteristicvaluechanged', (e) => {
                     const value = e.target.value;
                     polarBpm = (value.getUint8(0) & 0x1) ? value.getUint16(1, true) : value.getUint8(1);
-                    document.getElementById('polar-bpm').innerText = polarBpm + " BPM";
+                    document.getElementById('polar-bpm').innerText = polarBpm;
                 });
                 document.getElementById('btn-polar').innerText = "✅ 已連線";
                 document.getElementById('btn-polar').style.background = "#00aa00";
