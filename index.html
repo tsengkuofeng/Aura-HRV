@@ -48,9 +48,9 @@
         #video-container { position: relative; width: 100%; max-width: 400px; margin: 15px auto; border: 2px solid #444; border-radius: 10px; overflow: hidden; background: #000; }
         video { width: 100%; transform: scaleX(-1); display: block; }
 
-        /* 追蹤方框 */
-        #target-box { position: absolute; top: 20%; left: 35%; width: 30%; height: 20%; border: 2px dashed rgba(0, 255, 204, 0.4); box-sizing: border-box; pointer-events: none; border-radius: 10px; transition: all 0.2s ease-out; }
-        #target-hint { position: absolute; bottom: 10px; left: 0; width: 100%; text-align: center; background: rgba(0,0,0,0.5); color: #fff; padding: 5px 0; font-size: 0.85em; pointer-events: none; }
+        /* 追蹤方框 - 預設隱藏，由程式動態控制 */
+        #target-box { position: absolute; border: 2px solid #00ffcc; box-sizing: border-box; pointer-events: none; border-radius: 10px; transition: all 0.1s ease-out; display: none;}
+        #target-hint { position: absolute; bottom: 10px; left: 0; width: 100%; text-align: center; background: rgba(0,0,0,0.6); color: #fff; padding: 5px 0; font-size: 0.85em; pointer-events: none; }
 
         .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; max-width: 400px; padding: 0 15px; margin-bottom: 20px;}
         .stat-box { background: #1e1e1e; padding: 15px; border-radius: 10px; text-align: center; }
@@ -66,26 +66,13 @@
             <div class="disclaimer-text">
                 <h4>【衍生作品聲明】</h4>
                 <p>Aura HRV 是基於義大利米蘭大學開源專案 pyVHR 進行二次開發。<br>針對原有的 pyVHR 框架進行了心律變異度(HRV)演算法的改良與功能擴充。</p>
-                <p>參考文獻：<br>
-                @article{Boccignone2025,<br>
-                title = {Enhancing rPPG pulse-signal recovery by facial sampling and PSD Clustering},<br>
-                author = {Giuseppe Boccignone and Donatello Conte and Vittorio Cuculo and Alessandro D’Amelio and Giuliano Grossi and Raffaella Lanzarotti},<br>
-                journal = {Biomedical Signal Processing and Control},<br>
-                volume = {101}, pages = {107158}, year = {2025}, issn = {1746-8094},<br>
-                doi = {<a href="https://doi.org/10.1016/j.bspc.2024.107158" target="_blank">10.1016/j.bspc.2024.107158</a>}<br>
-                }<br><br>
-                @article{boccignone2022,<br>
-                title={pyVHR: a Python framework for remote photoplethysmography},<br>
-                author={Boccignone, Giuseppe et al.},<br>
-                journal={PeerJ Computer Science}, year={2022}, volume={8}, pages={e929},<br>
-                publisher={PeerJ Inc.}<br>
-                }<br><br>
-                @article{Boccignone2020,<br>
-                title = {An Open Framework for Remote-{PPG} Methods and their Assessment},<br>
-                author = {Giuseppe Boccignone et al.},<br>
-                journal = {{IEEE} Access}, pages = {1--1}, year = {2020},<br>
-                doi = {<a href="https://doi.org/10.1109/access.2020.3040936" target="_blank">10.1109/access.2020.3040936</a>}<br>
-                }</p>
+
+                <h4>【參考文獻】</h4>
+                <p>
+                    • <a href="https://doi.org/10.1016/j.bspc.2024.107158" target="_blank">DOI: 10.1016/j.bspc.2024.107158</a><br>
+                    • <a href="https://doi.org/10.7717/peerj-cs.929" target="_blank">DOI: 10.7717/peerj-cs.929</a><br>
+                    • <a href="https://doi.org/10.1109/access.2020.3040936" target="_blank">DOI: 10.1109/access.2020.3040936</a>
+                </p>
 
                 <h4>【授權條款 GPL-3.0】</h4>
                 <p>本專案採用 GPL-3.0 授權，所有使用者皆可自由獲取、修改並散佈本專案之原始碼。</p>
@@ -164,7 +151,7 @@
         <div id="video-container">
             <video id="webcam" autoplay playsinline></video>
             <div id="target-box"></div>
-            <div id="target-hint">請靠近鏡頭並對準方框</div>
+            <div id="target-hint">⚠️ 請將臉部靠近鏡頭</div>
             <canvas id="hidden-canvas" style="display:none;"></canvas>
         </div>
 
@@ -355,7 +342,6 @@
             localStorage.setItem('aura_profiles', updatedProfilesJson);
             alert("訓練記憶已成功儲存至設備！");
 
-            // 重置 UI
             document.getElementById('btn-save-train').style.display = 'none';
             document.getElementById('btn-start-train').style.display = 'inline';
             document.getElementById('train-time').style.display = 'inline';
@@ -366,7 +352,7 @@
         function onFaceDetected(results) {
             if (results.detections.length > 0) {
                 const bbox = results.detections[0].boundingBox;
-                // 鎖定額頭區域: x往右平移一點, y在最上方, 寬度取一半, 高度取上方四分之一
+                // 鎖定額頭區域
                 currentForeheadROI = {
                     x: bbox.xMin + bbox.width * 0.25,
                     y: bbox.yMin,
@@ -392,7 +378,6 @@
             const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
             if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                // 每 5 幀將畫面送給 AI 找臉部 (節省效能)
                 frameCount++;
                 if (frameCount % 5 === 0 && faceDetector) {
                     faceDetector.send({image: video}).catch(e => console.log(e));
@@ -402,55 +387,54 @@
                 canvas.height = video.videoHeight;
                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-                let rx, ry, rw, rh;
                 const boxElement = document.getElementById('target-box');
                 const hintElement = document.getElementById('target-hint');
 
                 if (currentForeheadROI) {
-                    // 自動追蹤模式
-                    rx = currentForeheadROI.x * canvas.width;
-                    ry = currentForeheadROI.y * canvas.height;
-                    rw = currentForeheadROI.w * canvas.width;
-                    rh = currentForeheadROI.h * canvas.height;
+                    // === 臉部抓取成功：顯示方框並進行資料擷取 ===
+                    let rx = currentForeheadROI.x * canvas.width;
+                    let ry = currentForeheadROI.y * canvas.height;
+                    let rw = currentForeheadROI.w * canvas.width;
+                    let rh = currentForeheadROI.h * canvas.height;
 
-                    // 邊界保護
                     rx = Math.max(0, rx); ry = Math.max(0, ry);
                     rw = Math.min(canvas.width - rx, rw); rh = Math.min(canvas.height - ry, rh);
 
-                    // 更新畫面上鏡像反轉的方框 (CSS 左邊距 = 100% - (x + w)%)
+                    // 畫面上鏡像反轉的方框計算
                     let boxLeft = (1 - (currentForeheadROI.x + currentForeheadROI.w)) * 100;
                     boxElement.style.left = boxLeft + '%';
                     boxElement.style.top = (currentForeheadROI.y * 100) + '%';
                     boxElement.style.width = (currentForeheadROI.w * 100) + '%';
                     boxElement.style.height = (currentForeheadROI.h * 100) + '%';
-                    boxElement.style.borderColor = '#00ffcc';
+                    boxElement.style.display = 'block';
+
                     hintElement.innerText = "✅ 額頭鎖定中";
                     hintElement.style.color = "#00ffcc";
+
+                    // 擷取影像資料並放入運算緩衝區
+                    const frameData = ctx.getImageData(rx, ry, rw, rh).data;
+                    let r=0, g=0, b=0;
+                    for(let i=0; i<frameData.length; i+=4) {
+                        r += frameData[i]; g += frameData[i+1]; b += frameData[i+2];
+                    }
+                    const count = frameData.length / 4;
+                    if(count > 0) rgbBuffer.push([r/count, g/count, b/count]);
+
                 } else {
-                    // 備用固定模式
-                    rx = canvas.width * 0.35; ry = canvas.height * 0.10;
-                    rw = canvas.width * 0.30; rh = canvas.height * 0.20;
-
-                    boxElement.style.left = '35%'; boxElement.style.top = '10%';
-                    boxElement.style.width = '30%'; boxElement.style.height = '20%';
-                    boxElement.style.borderColor = 'rgba(0, 255, 204, 0.4)';
-                    hintElement.innerText = "請靠近鏡頭並對準方框";
-                    hintElement.style.color = "#fff";
+                    // === 沒抓到臉：隱藏方框，暫停收集資料 ===
+                    boxElement.style.display = 'none';
+                    hintElement.innerText = "⚠️ 請將臉部靠近鏡頭";
+                    hintElement.style.color = "#ff4d4d";
+                    // 這裡刻意不 push 資料進 rgbBuffer，停止無意義的運算
                 }
 
-                const frameData = ctx.getImageData(rx, ry, rw, rh).data;
-                let r=0, g=0, b=0;
-                for(let i=0; i<frameData.length; i+=4) {
-                    r += frameData[i]; g += frameData[i+1]; b += frameData[i+2];
-                }
-                const count = frameData.length / 4;
-                if(count > 0) rgbBuffer.push([r/count, g/count, b/count]);
-
+                // 確保緩衝區上限
                 if (rgbBuffer.length > 300) {
                     rgbBuffer.shift();
                 }
 
-                if (rgbBuffer.length > 150 && rgbBuffer.length % 30 === 0) {
+                // 只有當緩衝區收集夠多，且固定每秒運算一次時才呼叫 Python
+                if (rgbBuffer.length > 150 && frameCount % 30 === 0) {
                     const result = pyProcessData(rgbBuffer.flat(), 30.0, polarBpm, currentProfile, isTrainingMode, isTrainingActive).toJs();
 
                     let outBpm = result.get ? result.get('bpm') : result.bpm;
