@@ -9,22 +9,18 @@
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         body { background-color: #121212; color: #fff; margin: 0; padding: 0; overflow-x: hidden; }
 
-        /* 畫面管理器 */
         .screen { display: none; width: 100vw; height: 100vh; flex-direction: column; align-items: center; justify-content: flex-start; }
         .screen.active { display: flex; }
 
-        /* 共用頂部導覽列 */
         .nav-bar { width: 100%; height: 60px; background: #1e1e1e; display: flex; justify-content: space-between; align-items: center; padding: 0 15px; border-bottom: 1px solid #333; }
         .nav-title { font-size: 1.2em; font-weight: bold; color: #00ffcc; }
         .nav-btn { background: none; border: none; color: #00ffcc; font-size: 1em; cursor: pointer; padding: 10px; }
 
-        /* === 聲明畫面 === */
         #screen-disclaimer { justify-content: center; padding: 20px; text-align: center; }
-        .disclaimer-box { background: #1e1e1e; padding: 25px; border-radius: 15px; max-width: 450px; width: 100%; }
+        .disclaimer-box { background: #1e1e1e; padding: 25px; border-radius: 15px; max-width: 400px; width: 100%; }
         .btn-primary { background: #00aa00; color: white; border: none; padding: 15px; font-size: 1.1em; border-radius: 8px; width: 100%; margin-top: 15px; font-weight: bold; cursor: pointer;}
         .btn-primary:disabled { background: #555; color: #aaa; }
 
-        /* === 首頁：橫向滑動卡片 === */
         .carousel-container { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; width: 100%; padding: 40px 20px; gap: 20px; flex-grow: 1; align-items: center; }
         .carousel-container::-webkit-scrollbar { display: none; }
         .card { flex: 0 0 85%; max-width: 350px; height: 60vh; background: #1e1e1e; border-radius: 20px; scroll-snap-align: center; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 30px; text-align: center; border: 2px solid #333; box-shadow: 0 10px 20px rgba(0,0,0,0.5); cursor: pointer; transition: transform 0.2s;}
@@ -32,16 +28,19 @@
         .card h2 { font-size: 1.8em; margin-bottom: 15px; }
         .card p { color: #aaa; font-size: 1em; line-height: 1.5; }
 
-        /* === 檔案列表畫面 === */
         .profile-list { width: 100%; max-width: 400px; padding: 20px; display: flex; flex-direction: column; gap: 15px; }
         .profile-item { background: #2a2a2a; padding: 20px; border-radius: 10px; font-size: 1.2em; display: flex; justify-content: space-between; align-items: center; cursor: pointer; border: 1px solid #444; }
         .profile-item:active { background: #333; }
         .empty-state { text-align: center; color: #777; margin-top: 50px; font-size: 1.1em; }
 
-        /* === 儀表板畫面 === */
         #video-container { position: relative; width: 100%; max-width: 400px; margin: 15px auto; border: 2px solid #444; border-radius: 10px; overflow: hidden; background: #000; }
         video { width: 100%; transform: scaleX(-1); display: block; }
-        #target-box { position: absolute; top: 20%; left: 35%; width: 30%; height: 20%; border: 2px solid #00ffcc; box-sizing: border-box; pointer-events: none; border-radius: 10px;}
+
+        /* 加入動畫提示使用者將額頭對準 */
+        #target-box { position: absolute; top: 20%; left: 35%; width: 30%; height: 20%; border: 2px dashed #00ffcc; box-sizing: border-box; pointer-events: none; border-radius: 10px; animation: pulse 2s infinite; }
+        @keyframes pulse { 0% { border-color: rgba(0, 255, 204, 0.4); } 50% { border-color: rgba(0, 255, 204, 1); } 100% { border-color: rgba(0, 255, 204, 0.4); } }
+        #target-hint { position: absolute; top: 42%; left: 0; width: 100%; text-align: center; color: rgba(255,255,255,0.7); font-size: 0.8em; pointer-events: none; }
+
         .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; max-width: 400px; padding: 0 15px; margin-bottom: 20px;}
         .stat-box { background: #1e1e1e; padding: 15px; border-radius: 10px; text-align: center; }
         .stat-val { font-size: 1.8em; color: #00ffcc; display: block; margin-top: 5px; font-weight: bold;}
@@ -52,25 +51,12 @@
     <div id="screen-disclaimer" class="screen active">
         <div class="disclaimer-box">
             <h2 style="color: #00aa00; margin-top: 0;">⚕ Aura HRV</h2>
-            <div style="text-align: left; background:#111; padding:15px; border-radius:8px; color: #ccc; font-size: 0.9em; line-height: 1.6; max-height: 50vh; overflow-y: auto; margin-bottom: 15px;">
-                <b style="color: #fff;">【衍生作品聲明】</b><br>
-                Aura HRV 是基於義大利米蘭大學開源專案 pyVHR 進行二次開發。<br>
-                針對原有的 pyVHR 框架進行了心律變異度(HRV)演算法的改良與功能擴充。<br><br>
-
-                <b style="color: #fff;">【參考文獻】</b><br>
-                • <a href="https://doi.org/10.1016/j.bspc.2024.107158" target="_blank" style="color: #00ffcc; text-decoration: none;">DOI: 10.1016/j.bspc.2024.107158</a><br>
-                • <a href="https://doi.org/10.7717/peerj-cs.929" target="_blank" style="color: #00ffcc; text-decoration: none;">DOI: 10.7717/peerj-cs.929</a><br>
-                • <a href="https://doi.org/10.1109/access.2020.3040936" target="_blank" style="color: #00ffcc; text-decoration: none;">DOI: 10.1109/access.2020.3040936</a><br><br>
-
-                <b style="color: #fff;">【授權條款 GPL-3.0】</b><br>
-                本專案採用 GPL-3.0 授權，所有使用者皆可自由獲取、修改並散佈本專案之原始碼。<br><br>
-
-                <b style="color: #fff;">【隱私與即時處理說明】</b><br>
-                • 無影像儲存：本軟體不會錄製或儲存任何影像資料。<br>
-                • 即時運算：所有生理數據均採即時運算處理，運算完成後即釋放。
-            </div>
+            <p style="text-align: left; background:#111; padding:15px; border-radius:8px; color: #ccc; font-size: 0.95em; line-height: 1.5;">
+                【隱私聲明】<br>本系統採本地即時運算，絕不外洩影像。稍後需允許使用攝影機以進行分析。<br><br>
+                【免責聲明】<br>衍生自 pyVHR。數據僅供參考，非醫療診斷之用。
+            </p>
             <p id="loading-text" style="color: yellow; font-weight: bold;">📥 正在載入 AI 引擎 (約需10秒)...</p>
-            <button id="btn-agree" class="btn-primary" style="display:none;" onclick="switchScreen('screen-home')">✅ 我同意並繼續</button>
+            <button id="btn-agree" class="btn-primary" style="display:none;" onclick="switchScreen('screen-home')">✅ 我同意</button>
         </div>
     </div>
 
@@ -107,7 +93,7 @@
             <button class="nav-btn" onclick="createNewProfile()">➕ 新增</button>
         </div>
         <div class="profile-list" id="profile-list-container">
-            </div>
+        </div>
     </div>
 
     <div id="screen-dashboard" class="screen">
@@ -124,6 +110,7 @@
         <div id="video-container">
             <video id="webcam" autoplay playsinline></video>
             <div id="target-box"></div>
+            <div id="target-hint">請將額頭對準方框並保持靜止</div>
             <canvas id="hidden-canvas" style="display:none;"></canvas>
         </div>
 
@@ -144,25 +131,28 @@
         let isTrainingMode = false;
         let currentProfile = "Public Mode";
         let localProfiles = {};
-        let mediaStream = null; // 記錄相機串流以便關閉
+        let mediaStream = null;
 
-        // === 畫面切換控制 ===
+        // 控制擷取頻率的變數 (非常重要)
+        let lastFrameTime = 0;
+        const TARGET_FPS = 30;
+        const frameInterval = 1000 / TARGET_FPS;
+
         function switchScreen(screenId) {
             document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
             document.getElementById(screenId).classList.add('active');
         }
 
         function goHome() {
-            // 停止相機以省電
             if(mediaStream) {
                 mediaStream.getTracks().forEach(t => t.stop());
                 mediaStream = null;
             }
-            rgbBuffer = []; // 清空緩衝
+            rgbBuffer = [];
+            document.getElementById('ai-buffer').innerText = `0 / 300`;
             switchScreen('screen-home');
         }
 
-        // === 初始化 Pyodide ===
         window.onload = async () => {
             const saved = localStorage.getItem('aura_profiles');
             if (saved) localProfiles = JSON.parse(saved);
@@ -186,7 +176,6 @@
             }
         };
 
-        // === 檔案管理邏輯 ===
         function openProfileManager(forTraining) {
             isTrainingMode = forTraining;
             document.getElementById('profile-page-title').innerText = forTraining ? "選擇訓練對象" : "選擇專屬檔案";
@@ -205,7 +194,6 @@
                     let div = document.createElement('div');
                     div.className = 'profile-item';
                     div.innerHTML = `<span>👤 ${name}</span> <span>▶</span>`;
-                    // 點擊列表項目，直接啟動相機進入儀表板
                     div.onclick = () => {
                         if(isTrainingMode) alert("提示：請確保已配戴 Polar 藍牙心跳帶。");
                         startApp(name, isTrainingMode);
@@ -223,46 +211,49 @@
             if(name && name.trim() !== "") {
                 const cleanName = name.trim();
                 if(!localProfiles[cleanName]) {
-                    // 修正：JS 中布林值必須是小寫 true
                     localProfiles[cleanName] = { "c_R": 3.0, "c_G": 2.0, "baseline_bpm": 75.0, "trained": true };
                     localStorage.setItem('aura_profiles', JSON.stringify(localProfiles));
                     pySyncProfiles(JSON.stringify(localProfiles));
-                    renderProfileList(); // 重新整理列表
+                    renderProfileList();
                 } else {
                     alert("此名稱已存在！");
                 }
             }
         }
 
-        // === 啟動主程式與攝影機 ===
         async function startApp(modeName, trainingFlag) {
             currentProfile = modeName;
             isTrainingMode = trainingFlag;
 
-            // 設定標題
             let modeTitle = (modeName === "Public Mode") ? "一般模式" : modeName;
             if(isTrainingMode) modeTitle = `訓練中: ${modeName}`;
             document.getElementById('current-mode-label').innerText = modeTitle;
 
-            // 切換到儀表板
             switchScreen('screen-dashboard');
 
-            // 請求相機權限
             try {
-                mediaStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+                mediaStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
                 const video = document.getElementById('webcam');
                 video.srcObject = mediaStream;
                 video.play();
+
+                rgbBuffer = []; // 重置緩衝區
                 requestAnimationFrame(processFrame);
             } catch (err) {
                 alert("無法存取攝影機：" + err.message);
-                goHome(); // 失敗則退回首頁
+                goHome();
             }
         }
 
-        // === 影像處理 ===
-        function processFrame() {
-            if (!mediaStream) return; // 如果回到首頁，停止處理迴圈
+        function processFrame(now) {
+            if (!mediaStream) return;
+            requestAnimationFrame(processFrame);
+
+            // 嚴格控制 FPS，避免手機 60Hz/120Hz 讓 AI 濾波器崩潰
+            if (!now) now = performance.now();
+            const elapsed = now - lastFrameTime;
+            if (elapsed < frameInterval) return;
+            lastFrameTime = now - (elapsed % frameInterval);
 
             const video = document.getElementById('webcam');
             const canvas = document.getElementById('hidden-canvas');
@@ -286,25 +277,31 @@
 
                 if (rgbBuffer.length > 300) {
                     rgbBuffer.shift();
-                    if (rgbBuffer.length % 30 === 0) {
-                        const result = pyProcessData(rgbBuffer.flat(), 30.0, polarBpm, currentProfile, isTrainingMode).toJs();
+                }
 
-                        document.getElementById('ai-bpm').innerText = result.get('bpm') || "--";
-                        document.getElementById('ai-rmssd').innerText = result.get('rmssd') || "--";
-                        document.getElementById('ai-sdnn').innerText = result.get('sdnn') || "--";
+                // 只要緩衝區超過 150 幀 (約5秒) 就開始每秒更新一次資料
+                if (rgbBuffer.length > 150 && rgbBuffer.length % 30 === 0) {
+                    const result = pyProcessData(rgbBuffer.flat(), 30.0, polarBpm, currentProfile, isTrainingMode).toJs();
 
-                        if (isTrainingMode && polarBpm > 30) {
-                            const updatedProfilesJson = pyExportProfiles();
-                            localStorage.setItem('aura_profiles', updatedProfilesJson);
-                        }
+                    // 安全提取 Pyodide Map 資料
+                    let outBpm = result.get ? result.get('bpm') : result.bpm;
+                    let outRmssd = result.get ? result.get('rmssd') : result.rmssd;
+                    let outSdnn = result.get ? result.get('sdnn') : result.sdnn;
+
+                    document.getElementById('ai-bpm').innerText = (outBpm > 0) ? outBpm : "--";
+                    document.getElementById('ai-rmssd').innerText = (outRmssd > 0) ? outRmssd : "--";
+                    document.getElementById('ai-sdnn').innerText = (outSdnn > 0) ? outSdnn : "--";
+
+                    if (isTrainingMode && polarBpm > 30) {
+                        const updatedProfilesJson = pyExportProfiles();
+                        localStorage.setItem('aura_profiles', updatedProfilesJson);
                     }
                 }
+
                 document.getElementById('ai-buffer').innerText = `${rgbBuffer.length} / 300`;
             }
-            requestAnimationFrame(processFrame);
         }
 
-        // === 藍牙連線 ===
         async function connectPolar() {
             try {
                 const device = await navigator.bluetooth.requestDevice({ filters: [{ services: ['heart_rate'] }] });
