@@ -35,7 +35,6 @@
         .card h2 { font-size: 1.8em; margin-bottom: 15px; }
         .card p { color: #aaa; font-size: 1em; line-height: 1.5; }
 
-        /* 更新：檔案列表的卡片與刪除按鈕樣式 */
         .profile-list { width: 100%; max-width: 450px; padding: 20px; display: flex; flex-direction: column; gap: 15px; overflow-y: auto; }
         .profile-item { background: #2a2a2a; padding: 15px; border-radius: 10px; display: flex; justify-content: space-between; align-items: flex-start; border: 1px solid #444; }
         .profile-info { flex-grow: 1; cursor: pointer; text-align: left; }
@@ -57,6 +56,13 @@
         .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; max-width: 400px; padding: 0 15px; margin-bottom: 20px;}
         .stat-box { background: #1e1e1e; padding: 15px; border-radius: 10px; text-align: center; }
         .stat-val { font-size: 1.8em; color: #00ffcc; display: block; margin-top: 5px; font-weight: bold;}
+
+        /* 報告頁面專屬樣式 */
+        .report-container { width: 100%; max-width: 500px; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; }
+        .report-card { background: #1e1e1e; border-radius: 15px; padding: 20px; border: 1px solid #333; text-align: center; }
+        .report-val { font-size: 2.5em; color: #00ffcc; font-weight: bold; margin: 10px 0; }
+        .report-desc { background: #111; padding: 15px; border-radius: 10px; font-size: 0.9em; line-height: 1.6; color: #ccc; text-align: left; border-left: 4px solid #00ffcc; }
+        .report-desc h3 { color: #fff; margin-top: 0; margin-bottom: 8px; font-size: 1.1em; }
     </style>
 </head>
 <body>
@@ -121,15 +127,17 @@
             <div class="nav-title" id="profile-page-title">選擇檔案</div>
             <button class="nav-btn" onclick="createNewProfile()">➕ 新增</button>
         </div>
-        <div class="profile-list" id="profile-list-container">
-        </div>
+        <div class="profile-list" id="profile-list-container"></div>
     </div>
 
     <div id="screen-dashboard" class="screen">
         <div class="nav-bar">
             <button class="nav-btn" onclick="goHome()">🏠 首頁</button>
             <div class="nav-title" id="current-mode-label" style="font-size: 1em;">Mode</div>
-            <button class="nav-btn" id="btn-polar" onclick="connectPolar()" style="background: #333; border-radius: 5px; padding: 5px 10px;">🔗 Polar</button>
+            <div style="display:flex; gap: 5px;">
+                <button class="nav-btn" id="btn-polar" onclick="connectPolar()" style="background: #333; border-radius: 5px; padding: 5px 10px;">🔗 Polar</button>
+                <button class="nav-btn" onclick="generateReport()" style="background: #0077ff; border-radius: 5px; padding: 5px 10px; color: white;">📊 結束測量</button>
+            </div>
         </div>
 
         <div class="top-info-bar">
@@ -165,6 +173,52 @@
         </div>
     </div>
 
+    <div id="screen-report" class="screen">
+        <div class="nav-bar">
+            <div style="width: 50px;"></div>
+            <div class="nav-title">📊 測量報告總結</div>
+            <button class="nav-btn" onclick="goHomeFromReport()">🏠 首頁</button>
+        </div>
+
+        <div class="report-container">
+            <div style="text-align: center; color: #aaa; margin-bottom: -10px;">本次測量平均數值</div>
+
+            <div class="stats-grid" style="margin-bottom: 0; padding: 0;">
+                <div class="report-card">
+                    <div style="color: #aaa;">平均心率 (BPM)</div>
+                    <div id="report-bpm" class="report-val">--</div>
+                </div>
+                <div class="report-card">
+                    <div style="color: #aaa;">總紀錄筆數</div>
+                    <div id="report-count" class="report-val" style="color: #fff;">--</div>
+                </div>
+            </div>
+
+            <div class="stats-grid" style="margin-bottom: 0; padding: 0;">
+                <div class="report-card" style="border-color: orange;">
+                    <div style="color: orange; font-weight: bold;">RMSSD</div>
+                    <div id="report-rmssd" class="report-val" style="color: orange;">--</div>
+                </div>
+                <div class="report-card" style="border-color: #0077ff;">
+                    <div style="color: #0077ff; font-weight: bold;">SDNN</div>
+                    <div id="report-sdnn" class="report-val" style="color: #0077ff;">--</div>
+                </div>
+            </div>
+
+            <div class="report-desc" style="border-left-color: orange;">
+                <h3>RMSSD (副交感神經活性)</h3>
+                <p>反映身體目前的**放鬆程度**與副交感神經系統的狀態。<br><br>數值較高：表示身體處於放鬆或恢復狀態。<br>數值偏低：可能代表身體正處於短期壓力、疲勞，或尚未從上一次的運動中恢復。</p>
+            </div>
+
+            <div class="report-desc" style="border-left-color: #0077ff;">
+                <h3>SDNN (總體心率變異度)</h3>
+                <p>反映整體**自律神經系統**（包含交感與副交感）的活性，是重要的長期健康指標。<br><br>數值越高：代表身體適應環境壓力與調節心臟跳動的能力越好。<br>數值偏低：可能意味著身體承受慢性壓力、過度訓練或自律神經調節能力較弱。</p>
+            </div>
+
+            <button class="btn-primary" style="margin-top: 10px;" onclick="goHomeFromReport()">完成並返回首頁</button>
+        </div>
+    </div>
+
     <script>
         let pyodideInstance;
         let pyProcessData, pySyncProfiles, pyExportProfiles;
@@ -178,7 +232,7 @@
 
         let trainTimer = null;
         let trainSeconds = 0;
-        let selectedTrainTime = 0; // 記錄使用者選擇的訓練總秒數
+        let selectedTrainTime = 0;
         let isTrainingActive = false;
 
         let lastFrameTime = 0;
@@ -187,12 +241,20 @@
         let frameCount = 0;
         let isDetectingFace = false;
 
+        // 收集單次測量數據，用於產出報告
+        let sessionStats = {
+            bpm: [],
+            rmssd: [],
+            sdnn: []
+        };
+
         function switchScreen(screenId) {
             document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
             document.getElementById(screenId).classList.add('active');
         }
 
-        function goHome() {
+        // 統一的清理資源函數
+        function cleanupSession() {
             if(mediaStream) {
                 mediaStream.getTracks().forEach(t => t.stop());
                 mediaStream = null;
@@ -202,6 +264,16 @@
             rgbBuffer = [];
             document.getElementById('ai-buffer').innerText = `0 / 300`;
             document.getElementById('ai-bpm').innerText = "--";
+            document.getElementById('ai-rmssd').innerText = "--";
+            document.getElementById('ai-sdnn').innerText = "--";
+        }
+
+        function goHome() {
+            cleanupSession();
+            switchScreen('screen-home');
+        }
+
+        function goHomeFromReport() {
             switchScreen('screen-home');
         }
 
@@ -241,9 +313,6 @@
             switchScreen('screen-profiles');
         }
 
-        // ============================
-        // 檔案列表與歷史紀錄渲染
-        // ============================
         function renderProfileList() {
             const container = document.getElementById('profile-list-container');
             container.innerHTML = "";
@@ -254,7 +323,6 @@
                     hasProfiles = true;
                     let p = localProfiles[name];
 
-                    // 生成歷史紀錄的 HTML
                     let historyHtml = '';
                     if (p.history && p.history.length > 0) {
                         historyHtml = `<div style="font-size: 0.85em; color: #aaa; margin-top: 10px; background: #1a1a1a; padding: 10px; border-radius: 5px; line-height: 1.5;">
@@ -288,15 +356,12 @@
             startApp(name, isTrainingMode);
         }
 
-        // ============================
-        // 刪除專屬檔案功能
-        // ============================
         function deleteProfile(name) {
             if(confirm(`⚠️ 確定要刪除「${name}」的專屬資料與訓練紀錄嗎？\n此動作無法還原！`)) {
                 delete localProfiles[name];
                 localStorage.setItem('aura_profiles', JSON.stringify(localProfiles));
                 alert(`「${name}」已刪除！系統將重新載入以徹底清除記憶體。`);
-                location.reload(); // 強制重整以清除 Pyodide 內的 Python 變數記憶
+                location.reload();
             }
         }
 
@@ -305,7 +370,6 @@
             if(name && name.trim() !== "") {
                 const cleanName = name.trim();
                 if(!localProfiles[cleanName]) {
-                    // 初始化時加入 history 陣列
                     localProfiles[cleanName] = { "c_R": 3.0, "c_G": 2.0, "baseline_bpm": 75.0, "trained": true, "history": [] };
                     localStorage.setItem('aura_profiles', JSON.stringify(localProfiles));
                     pySyncProfiles(JSON.stringify(localProfiles));
@@ -319,6 +383,9 @@
         async function startApp(modeName, trainingFlag) {
             currentProfile = modeName;
             isTrainingMode = trainingFlag;
+
+            // 清空先前的測量紀錄
+            sessionStats = { bpm: [], rmssd: [], sdnn: [] };
 
             let modeTitle = (modeName === "Public Mode") ? "一般模式" : modeName;
             if(isTrainingMode) modeTitle = `訓練模式: ${modeName}`;
@@ -373,22 +440,16 @@
             }, 1000);
         }
 
-        // ============================
-        // 儲存訓練與歷史紀錄寫入
-        // ============================
         function saveTraining() {
-            // 從 Python 獲取更新後的參數
             const pyProfilesJson = pyExportProfiles();
             const pyProfiles = JSON.parse(pyProfilesJson);
 
-            // 將 Python 更新的參數同步到 JS 本地物件
             if (pyProfiles[currentProfile]) {
                 localProfiles[currentProfile].c_R = pyProfiles[currentProfile].c_R;
                 localProfiles[currentProfile].c_G = pyProfiles[currentProfile].c_G;
                 localProfiles[currentProfile].baseline_bpm = pyProfiles[currentProfile].baseline_bpm;
             }
 
-            // 寫入歷史紀錄
             if (!localProfiles[currentProfile].history) {
                 localProfiles[currentProfile].history = [];
             }
@@ -397,21 +458,17 @@
             const mins = selectedTrainTime / 60;
             const logEntry = `✅ ${dateStr} - 訓練 ${mins} 分鐘 (Polar: ${polarBpm} BPM)`;
 
-            // 將新紀錄插入到陣列最前面 (最新的在最上)
             localProfiles[currentProfile].history.unshift(logEntry);
 
-            // 最多保留最新 5 筆紀錄，避免 localStorage 爆滿
             if (localProfiles[currentProfile].history.length > 5) {
                 localProfiles[currentProfile].history.pop();
             }
 
-            // 儲存回 localStorage 與 Python 引擎
             localStorage.setItem('aura_profiles', JSON.stringify(localProfiles));
             pySyncProfiles(JSON.stringify(localProfiles));
 
             alert("訓練記憶與歷史紀錄已成功儲存！");
 
-            // 介面重置
             document.getElementById('btn-save-train').style.display = 'none';
             document.getElementById('btn-start-train').style.display = 'inline';
             document.getElementById('train-time').style.display = 'inline';
@@ -527,6 +584,12 @@
                             document.getElementById('ai-bpm').style.fontSize = "1.8em";
                             document.getElementById('ai-rmssd').innerText = outRmssd;
                             document.getElementById('ai-sdnn').innerText = outSdnn;
+
+                            // 將成功算出的數據記錄到陣列，供報告使用
+                            sessionStats.bpm.push(outBpm);
+                            sessionStats.rmssd.push(outRmssd);
+                            sessionStats.sdnn.push(outSdnn);
+
                             hintElement.innerText = "✅ 額頭鎖定，訊號讀取中";
                             hintElement.style.color = "#00ffcc";
                         } else {
@@ -544,6 +607,34 @@
 
                 document.getElementById('ai-buffer').innerText = `${rgbBuffer.length} / 300`;
             }
+        }
+
+        // 產生並顯示報告
+        function generateReport() {
+            // 先清理攝影機與引擎負載
+            cleanupSession();
+
+            const count = sessionStats.bpm.length;
+
+            if (count === 0) {
+                alert("本次測量未成功擷取到有效數據，無法產生報告。");
+                switchScreen('screen-home');
+                return;
+            }
+
+            // 計算平均值
+            const avgBpm = sessionStats.bpm.reduce((a, b) => a + b, 0) / count;
+            const avgRmssd = sessionStats.rmssd.reduce((a, b) => a + b, 0) / count;
+            const avgSdnn = sessionStats.sdnn.reduce((a, b) => a + b, 0) / count;
+
+            // 更新報告頁面 DOM
+            document.getElementById('report-count').innerText = count + " 筆";
+            document.getElementById('report-bpm').innerText = Math.round(avgBpm);
+            document.getElementById('report-rmssd').innerText = Math.round(avgRmssd);
+            document.getElementById('report-sdnn').innerText = Math.round(avgSdnn);
+
+            // 切換到報告畫面
+            switchScreen('screen-report');
         }
 
         async function connectPolar() {
