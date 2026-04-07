@@ -1,6 +1,7 @@
 import numpy as np
 from scipy import signal
 import json
+import traceback
 
 
 class WebProfileManager:
@@ -34,13 +35,21 @@ def export_profiles():
 
 def process_data_from_js(rgb_data, fps, polar_bpm, profile_name, is_training, is_training_active):
     engine.current_user = profile_name
-    buffer = np.array(rgb_data).reshape(-1, 3)
-
-    if len(buffer) < 150:
-        return {"bpm": 0, "rmssd": 0, "sdnn": 0}
-
     try:
+        # 【修正 1】確保 Pyodide 的 JS Proxy 完美轉為 Python 陣列
+        if hasattr(rgb_data, 'to_py'):
+            rgb_data = rgb_data.to_py()
+        buffer = np.asarray(rgb_data, dtype=np.float64).reshape(-1, 3)
+
+        if len(buffer) < 150:
+            return {"bpm": 0, "rmssd": 0, "sdnn": 0, "error": "緩衝資料不足", "peaks": 0}
+
         R, G, B = buffer[:, 0], buffer[:, 1], buffer[:, 2]
+
+        # 【修正 2】防呆：如果 iOS 阻擋了 Canvas 導致全黑，提早阻斷並報錯
+        if np.mean(G) < 1:
+            return {"bpm": 0, "rmssd": 0, "sdnn": 0, "error": "影像全黑 (請檢查iOS隱私設定)", "peaks": 0}
+
         p = engine.profiles.get(profile_name, engine.profiles["Public Mode"])
 
         X = p["c_R"] * R - p["c_G"] * G
@@ -51,44 +60,50 @@ def process_data_from_js(rgb_data, fps, polar_bpm, profile_name, is_training, is
         alpha = np.std(X) / std_Y
         bvp = signal.detrend(X - alpha * Y)
 
-        nyq = fps / 2
+        nyq = fps / 2.0
+
+        # 【修正 3】放寬濾波器範圍，不再死鎖於 baseline，容忍 45~180 BPM
+        low_cut = 0.75 / nyq
+        high_cut = 3.0 / nyq
+        peak_dist = int(fps * 0.4)
 
         if is_training and polar_bpm > 30:
             target_hz = polar_bpm / 60.0
-            low_cut = max(0.5, target_hz - 0.25) / nyq
-            high_cut = min(3.0, target_hz + 0.25) / nyq
+            low_cut = max(0.5, target_hz - 0.3) / nyq
+            high_cut = min(3.0, target_hz + 0.3) / nyq
             peak_dist = int(fps / (target_hz + 0.5))
-
-            # 只有當倒數計時正在運行時，AI 才進行學習更新
             if is_training_active:
                 engine.update_learning(polar_bpm, np.mean(R), np.mean(G))
-        else:
-            base_hz = p["baseline_bpm"] / 60.0
-            low_cut = max(0.5, base_hz - 0.5) / nyq
-            high_cut = min(3.0, base_hz + 0.5) / nyq
-            peak_dist = int(fps * 0.4)
 
-        b, a = signal.butter(4, [low_cut, high_cut], btype='band')
+        b, a = signal.butter(3, [low_cut, high_cut], btype='band')
         f_bvp = signal.filtfilt(b, a, bvp)
 
-        peaks, _ = signal.find_peaks(f_bvp, distance=peak_dist, prominence=np.std(f_bvp) * 0.25)
+        # 【修正 4】大幅降低波峰檢測的敏感度門檻
+        prominence_val = max(np.std(f_bvp) * 0.1, 1e-5)
+        peaks, _ = signal.find_peaks(f_bvp, distance=peak_dist, prominence=prominence_val)
 
         bpm, rmssd, sdnn = 0, 0, 0
-        if len(peaks) >= 5:
+        if len(peaks) >= 4:
             rr = np.diff(peaks) * (1000.0 / fps)
-            # 專業過濾：只留下生理可能的範圍 (300ms ~ 1500ms)
             valid_rr = rr[(rr > 300) & (rr < 1500)]
 
-            if len(valid_rr) >= 3:
-                # 移除突發的跳動 (中位數過濾法)
+            if len(valid_rr) >= 2:
                 median_rr = np.median(valid_rr)
-                valid_rr = valid_rr[np.abs(valid_rr - median_rr) < (median_rr * 0.2)]
+                valid_rr = valid_rr[np.abs(valid_rr - median_rr) < (median_rr * 0.3)]
 
                 if len(valid_rr) >= 2:
-                    bpm = 60000 / np.median(valid_rr)
-                    rmssd = np.sqrt(np.mean(np.diff(valid_rr) ** 2))
+                    bpm = 60000.0 / np.median(valid_rr)
+                    if len(valid_rr) > 2:
+                        rmssd = np.sqrt(np.mean(np.diff(valid_rr) ** 2))
                     sdnn = np.std(valid_rr)
 
-        return {"bpm": round(bpm, 1), "rmssd": round(rmssd, 1), "sdnn": round(sdnn, 1)}
+        return {
+            "bpm": round(bpm, 1),
+            "rmssd": round(rmssd, 1),
+            "sdnn": round(sdnn, 1),
+            "error": "",
+            "peaks": len(peaks)
+        }
     except Exception as e:
-        return {"bpm": 0, "rmssd": 0, "sdnn": 0, "error": str(e)}
+        # 回傳完整報錯字串給 JS
+        return {"bpm": 0, "rmssd": 0, "sdnn": 0, "error": str(traceback.format_exc()), "peaks": 0}

@@ -48,7 +48,7 @@
         video { width: 100%; height: auto; transform: scaleX(-1); display: block; object-fit: cover; }
 
         #target-box { position: absolute; border: 3px solid #00ffcc; box-sizing: border-box; pointer-events: none; border-radius: 8px; transition: all 0.1s linear; display: none; box-shadow: 0 0 10px rgba(0, 255, 204, 0.5); z-index: 10;}
-        #target-hint { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.7); color: #fff; padding: 5px 15px; font-size: 0.85em; border-radius: 15px; pointer-events: none; white-space: nowrap; z-index: 10; }
+        #target-hint { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: #fff; padding: 5px 15px; font-size: 0.85em; border-radius: 15px; pointer-events: none; white-space: nowrap; z-index: 10; }
 
         .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; max-width: 400px; padding: 0 15px; margin-bottom: 20px;}
         .stat-box { background: #1e1e1e; padding: 15px; border-radius: 10px; text-align: center; }
@@ -147,14 +147,14 @@
         </div>
 
         <div id="video-container">
-            <video id="webcam" autoplay playsinline></video>
+            <video id="webcam" autoplay playsinline webkit-playsinline muted></video>
             <div id="target-box"></div>
             <div id="target-hint">⚠️ 等待影像載入中...</div>
             <canvas id="hidden-canvas" style="display:none;"></canvas>
         </div>
 
         <div class="stats-grid">
-            <div class="stat-box">AI BPM<span id="ai-bpm" class="stat-val" style="font-size: 1.5em;">--</span></div>
+            <div class="stat-box">AI BPM<span id="ai-bpm" class="stat-val" style="font-size: 1.4em;">--</span></div>
             <div class="stat-box">Buffer<span id="ai-buffer" class="stat-val" style="color:#aaa; font-size: 1.2em;">0 / 300</span></div>
             <div class="stat-box">RMSSD<span id="ai-rmssd" class="stat-val" style="color: orange;">--</span></div>
             <div class="stat-box">SDNN<span id="ai-sdnn" class="stat-val" style="color: orange;">--</span></div>
@@ -180,7 +180,7 @@
         let faceDetector = null;
         let currentForeheadROI = null;
         let frameCount = 0;
-        let isDetectingFace = false; // 防手機卡死鎖
+        let isDetectingFace = false;
 
         function switchScreen(screenId) {
             document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -196,6 +196,7 @@
             isTrainingActive = false;
             rgbBuffer = [];
             document.getElementById('ai-buffer').innerText = `0 / 300`;
+            document.getElementById('ai-bpm').innerText = "--";
             switchScreen('screen-home');
         }
 
@@ -363,9 +364,8 @@
             if (!mediaStream) return;
             requestAnimationFrame(processFrame);
 
-            // 精確控制 30FPS 擷取 (33.3ms)
             if (!now) now = performance.now();
-            if (now - lastFrameTime < 33.3) return;
+            if (now - lastFrameTime < 33.3) return; // 強制 30 FPS
             lastFrameTime = now;
 
             const video = document.getElementById('webcam');
@@ -379,14 +379,12 @@
                 canvas.height = video.videoHeight;
                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-                // 臉部辨識鎖：確保手機不會因為 AI 運算塞車而當機
                 if (frameCount % 5 === 0 && faceDetector && !isDetectingFace) {
                     isDetectingFace = true;
                     faceDetector.send({image: canvas}).then(() => {
                         isDetectingFace = false;
                     }).catch(e => {
                         isDetectingFace = false;
-                        console.log("MediaPipe Error: ", e);
                     });
                 }
 
@@ -409,17 +407,14 @@
                     boxElement.style.height = (currentForeheadROI.h * 100) + '%';
                     boxElement.style.display = 'block';
 
-                    hintElement.innerText = "✅ 額頭鎖定中";
-                    hintElement.style.color = "#00ffcc";
-
                     if (rw > 0 && rh > 0 && !isNaN(rx) && !isNaN(ry)) {
                         try {
                             const frameData = ctx.getImageData(rx, ry, rw, rh).data;
-                            let r=0, g=0, b=0;
+                            let r=0, g=0, b=0, count=0;
                             for(let i=0; i<frameData.length; i+=4) {
                                 r += frameData[i]; g += frameData[i+1]; b += frameData[i+2];
+                                count++;
                             }
-                            const count = frameData.length / 4;
                             if(count > 0) rgbBuffer.push([r/count, g/count, b/count]);
                         } catch (e) {
                             console.error("影像擷取錯誤:", e);
@@ -436,10 +431,8 @@
                     rgbBuffer.shift();
                 }
 
-                // 觸發 Python AI 引擎
                 if (rgbBuffer.length > 150 && frameCount % 30 === 0) {
                     try {
-                        // 強制轉換為 Float64Array，避免 Pyodide 陣列轉換遺失資料
                         const flatData = Float64Array.from(rgbBuffer.flat());
                         const result = pyProcessData(flatData, 30.0, polarBpm, currentProfile, isTrainingMode, isTrainingActive).toJs();
 
@@ -447,27 +440,27 @@
                         let outRmssd = result.get ? result.get('rmssd') : result.rmssd;
                         let outSdnn = result.get ? result.get('sdnn') : result.sdnn;
                         let outErr = result.get ? result.get('error') : result.error;
+                        let outPeaks = result.get ? result.get('peaks') : result.peaks;
 
-                        if (outErr) {
-                            hintElement.innerText = "⚠️ AI 錯誤: 需重整";
+                        if (outErr && outErr !== "") {
+                            hintElement.innerText = "⚠️ 錯誤: " + outErr.substring(0, 15);
+                            hintElement.style.color = "#ff4d4d";
                             console.error("Python 錯誤:", outErr);
                         } else if (outBpm > 0) {
-                            // 成功算出身理數據
                             document.getElementById('ai-bpm').innerText = outBpm;
+                            document.getElementById('ai-bpm').style.fontSize = "1.8em";
                             document.getElementById('ai-rmssd').innerText = outRmssd;
                             document.getElementById('ai-sdnn').innerText = outSdnn;
+                            hintElement.innerText = "✅ 額頭鎖定，訊號讀取中";
+                            hintElement.style.color = "#00ffcc";
                         } else {
-                            // 資料不足或雜訊太高時的動態回饋
-                            document.getElementById('ai-bpm').innerText = "計算中...";
-                            document.getElementById('ai-bpm').style.fontSize = "1em";
+                            document.getElementById('ai-bpm').innerText = "運算中";
+                            document.getElementById('ai-bpm').style.fontSize = "1.2em";
                             if (currentForeheadROI) {
-                                hintElement.innerText = "⏳ 運算中...請保持臉部靜止";
+                                hintElement.innerText = `⏳ 擷取波峰中 (${outPeaks}/4)... 請保持靜止`;
                                 hintElement.style.color = "yellow";
                             }
                         }
-
-                        if (outBpm > 0) document.getElementById('ai-bpm').style.fontSize = "1.8em";
-
                     } catch (e) {
                         console.error("AI 呼叫崩潰:", e);
                     }
