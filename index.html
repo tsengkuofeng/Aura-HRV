@@ -58,11 +58,14 @@
         .stat-val { font-size: 1.8em; color: #00ffcc; display: block; margin-top: 5px; font-weight: bold;}
 
         /* 報告頁面專屬樣式 */
-        .report-container { width: 100%; max-width: 500px; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; }
+        .report-container { width: 100%; max-width: 500px; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; padding-bottom: 40px;}
         .report-card { background: #1e1e1e; border-radius: 15px; padding: 20px; border: 1px solid #333; text-align: center; }
         .report-val { font-size: 2.5em; color: #00ffcc; font-weight: bold; margin: 10px 0; }
         .report-desc { background: #111; padding: 15px; border-radius: 10px; font-size: 0.9em; line-height: 1.6; color: #ccc; text-align: left; border-left: 4px solid #00ffcc; }
         .report-desc h3 { color: #fff; margin-top: 0; margin-bottom: 8px; font-size: 1.1em; }
+        .norm-table { width: 100%; margin-top: 10px; border-collapse: collapse; font-size: 0.85em; text-align: center; }
+        .norm-table th, .norm-table td { border: 1px solid #444; padding: 5px; }
+        .norm-table th { background: #222; color: #ddd; }
     </style>
 </head>
 <body>
@@ -136,24 +139,24 @@
             <div class="nav-title" id="current-mode-label" style="font-size: 1em;">Mode</div>
             <div style="display:flex; gap: 5px;">
                 <button class="nav-btn" id="btn-polar" onclick="connectPolar()" style="background: #333; border-radius: 5px; padding: 5px 10px;">🔗 Polar</button>
-                <button class="nav-btn" onclick="generateReport()" style="background: #0077ff; border-radius: 5px; padding: 5px 10px; color: white;">📊 結束測量</button>
+                <button class="nav-btn" id="btn-report" onclick="generateReport()" style="display:none; background: #0077ff; border-radius: 5px; padding: 5px 10px; color: white;">📊 查看報告</button>
             </div>
         </div>
 
         <div class="top-info-bar">
             <div class="polar-display">
-                ❤️ Polar: <span id="polar-bpm">-- BPM</span>
+                ❤️ <span id="polar-bpm">-- BPM</span>
             </div>
-            <div class="train-controls" id="train-controls-div" style="display: none;">
-                <select id="train-time" style="background:#333; color:white; border:none; padding:5px; border-radius:5px;">
+            <div class="train-controls" id="timer-controls-div">
+                <select id="timer-select" style="background:#333; color:white; border:none; padding:5px; border-radius:5px;">
                     <option value="60">1:00</option>
                     <option value="120">2:00</option>
                     <option value="180">3:00</option>
                     <option value="240">4:00</option>
                     <option value="300">5:00</option>
                 </select>
-                <button id="btn-start-train" onclick="startTrainingTimer()" style="background:#ff7700; padding:5px 10px; border:none; border-radius:5px; color:white; font-weight:bold; cursor:pointer;">開始訓練</button>
-                <span id="train-countdown" style="display:none; color:yellow; font-weight:bold;"></span>
+                <button id="btn-start-timer" onclick="startTimer()" style="background:#ff7700; padding:5px 10px; border:none; border-radius:5px; color:white; font-weight:bold; cursor:pointer;">開始測量</button>
+                <span id="timer-countdown" style="display:none; color:yellow; font-weight:bold;"></span>
                 <button id="btn-save-train" onclick="saveTraining()" style="display:none; background:#00aa00; padding:5px 10px; border:none; border-radius:5px; color:white; font-weight:bold; cursor:pointer;">💾 儲存記憶</button>
             </div>
         </div>
@@ -169,7 +172,7 @@
             <div class="stat-box">AI BPM<span id="ai-bpm" class="stat-val" style="font-size: 1.4em;">--</span></div>
             <div class="stat-box">Buffer<span id="ai-buffer" class="stat-val" style="color:#aaa; font-size: 1.2em;">0 / 300</span></div>
             <div class="stat-box">RMSSD<span id="ai-rmssd" class="stat-val" style="color: orange;">--</span></div>
-            <div class="stat-box">SDNN<span id="ai-sdnn" class="stat-val" style="color: orange;">--</span></div>
+            <div class="stat-box">SDNN<span id="ai-sdnn" class="stat-val" style="color: #0077ff;">--</span></div>
         </div>
     </div>
 
@@ -190,7 +193,7 @@
                 </div>
                 <div class="report-card">
                     <div style="color: #aaa;">總紀錄筆數</div>
-                    <div id="report-count" class="report-val" style="color: #fff;">--</div>
+                    <div id="report-count" class="report-val" style="color: #fff; font-size: 2em; line-height: 1.25em;">--</div>
                 </div>
             </div>
 
@@ -207,12 +210,24 @@
 
             <div class="report-desc" style="border-left-color: orange;">
                 <h3>RMSSD (副交感神經活性)</h3>
-                <p>反映身體目前的**放鬆程度**與副交感神經系統的狀態。<br><br>數值較高：表示身體處於放鬆或恢復狀態。<br>數值偏低：可能代表身體正處於短期壓力、疲勞，或尚未從上一次的運動中恢復。</p>
+                <p>反映身體目前的**放鬆程度**與副交感神經系統的狀態。可作為短期疲勞與恢復狀況的指標。</p>
+                <table class="norm-table">
+                    <tr><th>數值區間</th><th>狀態評估</th></tr>
+                    <tr><td style="color: #ff4d4d;">&lt; 20 ms</td><td>偏低 (疲勞 / 壓力較大)</td></tr>
+                    <tr><td style="color: #fff;">20 - 50 ms</td><td>正常範圍</td></tr>
+                    <tr><td style="color: #00ffcc;">&gt; 50 ms</td><td>良好 (放鬆 / 恢復佳)</td></tr>
+                </table>
             </div>
 
             <div class="report-desc" style="border-left-color: #0077ff;">
                 <h3>SDNN (總體心率變異度)</h3>
-                <p>反映整體**自律神經系統**（包含交感與副交感）的活性，是重要的長期健康指標。<br><br>數值越高：代表身體適應環境壓力與調節心臟跳動的能力越好。<br>數值偏低：可能意味著身體承受慢性壓力、過度訓練或自律神經調節能力較弱。</p>
+                <p>反映整體**自律神經系統**（交感與副交感）的總和活性，是評估長期自律神經調節與抗壓能力的重要指標。</p>
+                <table class="norm-table">
+                    <tr><th>數值區間</th><th>狀態評估</th></tr>
+                    <tr><td style="color: #ff4d4d;">&lt; 30 ms</td><td>偏低 (調節力弱 / 慢性壓力)</td></tr>
+                    <tr><td style="color: #fff;">30 - 50 ms</td><td>正常範圍</td></tr>
+                    <tr><td style="color: #00ffcc;">&gt; 50 ms</td><td>良好 (適應力與彈性佳)</td></tr>
+                </table>
             </div>
 
             <button class="btn-primary" style="margin-top: 10px;" onclick="goHomeFromReport()">完成並返回首頁</button>
@@ -352,7 +367,7 @@
         }
 
         function selectProfile(name) {
-            if(isTrainingMode) alert("提示：請確保已配戴 Polar 藍牙心跳帶。");
+            if(isTrainingMode) alert("提示：開始訓練前，請確保已配戴 Polar 藍牙心跳帶。");
             startApp(name, isTrainingMode);
         }
 
@@ -384,18 +399,19 @@
             currentProfile = modeName;
             isTrainingMode = trainingFlag;
 
-            // 清空先前的測量紀錄
-            sessionStats = { bpm: [], rmssd: [], sdnn: [] };
-
             let modeTitle = (modeName === "Public Mode") ? "一般模式" : modeName;
             if(isTrainingMode) modeTitle = `訓練模式: ${modeName}`;
             document.getElementById('current-mode-label').innerText = modeTitle;
 
-            document.getElementById('train-controls-div').style.display = isTrainingMode ? 'flex' : 'none';
-            document.getElementById('btn-start-train').style.display = 'inline';
-            document.getElementById('train-time').style.display = 'inline';
-            document.getElementById('train-countdown').style.display = 'none';
+            // 調整 UI 顯示狀態，無論模式都顯示計時器，隱藏報告按鈕
+            document.getElementById('timer-controls-div').style.display = 'flex';
+            document.getElementById('btn-start-timer').innerText = isTrainingMode ? "開始訓練" : "開始測量";
+            document.getElementById('btn-start-timer').style.background = isTrainingMode ? "#ff7700" : "#00aa00";
+            document.getElementById('btn-start-timer').style.display = 'inline';
+            document.getElementById('timer-select').style.display = 'inline';
+            document.getElementById('timer-countdown').style.display = 'none';
             document.getElementById('btn-save-train').style.display = 'none';
+            document.getElementById('btn-report').style.display = 'none';
             isTrainingActive = false;
 
             switchScreen('screen-dashboard');
@@ -414,28 +430,43 @@
             }
         }
 
-        function startTrainingTimer() {
-            if(polarBpm === 0) { alert("請先確認 Polar 心跳帶已連線並抓到數據！"); return; }
-            const sel = document.getElementById('train-time');
+        function startTimer() {
+            // 如果是訓練模式，強制要求 Polar 心跳帶連線
+            if(isTrainingMode && polarBpm === 0) {
+                alert("請先確認 Polar 心跳帶已連線並抓到數據！");
+                return;
+            }
+
+            // 清空舊的測量紀錄，確保報告只統計倒數期間內的數據
+            sessionStats = { bpm: [], rmssd: [], sdnn: [] };
+
+            const sel = document.getElementById('timer-select');
             selectedTrainTime = parseInt(sel.value);
             trainSeconds = selectedTrainTime;
             isTrainingActive = true;
 
-            document.getElementById('btn-start-train').style.display = 'none';
+            document.getElementById('btn-start-timer').style.display = 'none';
             sel.style.display = 'none';
-            document.getElementById('train-countdown').style.display = 'inline';
+            document.getElementById('timer-countdown').style.display = 'inline';
 
             trainTimer = setInterval(() => {
                 trainSeconds--;
                 let m = Math.floor(trainSeconds / 60);
                 let s = trainSeconds % 60;
-                document.getElementById('train-countdown').innerText = `學習中 ${m}:${s.toString().padStart(2, '0')}`;
+                let statusText = isTrainingMode ? "訓練中 " : "測量中 ";
+
+                document.getElementById('timer-countdown').innerText = `${statusText}${m}:${s.toString().padStart(2, '0')}`;
 
                 if(trainSeconds <= 0) {
                     clearInterval(trainTimer);
                     isTrainingActive = false;
-                    document.getElementById('train-countdown').innerText = "訓練完成";
-                    document.getElementById('btn-save-train').style.display = 'inline';
+
+                    document.getElementById('timer-countdown').innerText = isTrainingMode ? "訓練完成" : "測量完成";
+                    document.getElementById('btn-report').style.display = 'inline'; // 倒數結束顯示報告按鈕
+
+                    if (isTrainingMode) {
+                        document.getElementById('btn-save-train').style.display = 'inline';
+                    }
                 }
             }, 1000);
         }
@@ -470,9 +501,6 @@
             alert("訓練記憶與歷史紀錄已成功儲存！");
 
             document.getElementById('btn-save-train').style.display = 'none';
-            document.getElementById('btn-start-train').style.display = 'inline';
-            document.getElementById('train-time').style.display = 'inline';
-            document.getElementById('train-countdown').style.display = 'none';
         }
 
         function onFaceDetected(results) {
@@ -585,12 +613,14 @@
                             document.getElementById('ai-rmssd').innerText = outRmssd;
                             document.getElementById('ai-sdnn').innerText = outSdnn;
 
-                            // 將成功算出的數據記錄到陣列，供報告使用
-                            sessionStats.bpm.push(outBpm);
-                            sessionStats.rmssd.push(outRmssd);
-                            sessionStats.sdnn.push(outSdnn);
+                            // 只有在按下「開始測量/訓練」進入計時狀態時，才將數據收集至報告陣列
+                            if (isTrainingActive) {
+                                sessionStats.bpm.push(outBpm);
+                                sessionStats.rmssd.push(outRmssd);
+                                sessionStats.sdnn.push(outSdnn);
+                            }
 
-                            hintElement.innerText = "✅ 額頭鎖定，訊號讀取中";
+                            hintElement.innerText = isTrainingActive ? "✅ 訊號讀取與記錄中" : "✅ 額頭鎖定，訊號讀取中";
                             hintElement.style.color = "#00ffcc";
                         } else {
                             document.getElementById('ai-bpm').innerText = "運算中";
@@ -627,11 +657,20 @@
             const avgRmssd = sessionStats.rmssd.reduce((a, b) => a + b, 0) / count;
             const avgSdnn = sessionStats.sdnn.reduce((a, b) => a + b, 0) / count;
 
+            // 判斷常模評估狀態
+            let rmssdEval = avgRmssd < 20 ? "<span style='font-size: 0.45em; color: #ff4d4d;'><br>(偏低)</span>" :
+                           (avgRmssd <= 50 ? "<span style='font-size: 0.45em; color: #fff;'><br>(正常)</span>" :
+                                             "<span style='font-size: 0.45em; color: #00ffcc;'><br>(良好)</span>");
+
+            let sdnnEval = avgSdnn < 30 ? "<span style='font-size: 0.45em; color: #ff4d4d;'><br>(偏低)</span>" :
+                          (avgSdnn <= 50 ? "<span style='font-size: 0.45em; color: #fff;'><br>(正常)</span>" :
+                                            "<span style='font-size: 0.45em; color: #00ffcc;'><br>(良好)</span>");
+
             // 更新報告頁面 DOM
-            document.getElementById('report-count').innerText = count + " 筆";
+            document.getElementById('report-count').innerText = count;
             document.getElementById('report-bpm').innerText = Math.round(avgBpm);
-            document.getElementById('report-rmssd').innerText = Math.round(avgRmssd);
-            document.getElementById('report-sdnn').innerText = Math.round(avgSdnn);
+            document.getElementById('report-rmssd').innerHTML = Math.round(avgRmssd) + rmssdEval;
+            document.getElementById('report-sdnn').innerHTML = Math.round(avgSdnn) + sdnnEval;
 
             // 切換到報告畫面
             switchScreen('screen-report');
