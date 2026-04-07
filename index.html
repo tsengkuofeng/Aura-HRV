@@ -24,7 +24,6 @@
         .disclaimer-text h4 { color: #00ffcc; margin: 15px 0 5px 0; font-size: 1.1em;}
         .disclaimer-text h4:first-child { margin-top: 0; }
         .disclaimer-text a { color: #00aaff; text-decoration: none; word-break: break-all;}
-        .disclaimer-text a:hover { text-decoration: underline; }
 
         .btn-primary { background: #00aa00; color: white; border: none; padding: 15px; font-size: 1.1em; border-radius: 8px; width: 100%; font-weight: bold; cursor: pointer;}
         .btn-primary:disabled { background: #555; color: #aaa; }
@@ -45,11 +44,9 @@
         .polar-display { color: #00ffcc; font-weight: bold; display: flex; align-items: center; gap: 10px;}
         .train-controls { display: flex; align-items: center; gap: 10px; }
 
-        /* 影片容器：必須是 flex 才能完美貼合比例 */
         #video-container { position: relative; width: 100%; max-width: 400px; margin: 15px auto; border: 2px solid #444; border-radius: 10px; overflow: hidden; background: #000; display: flex; line-height: 0; }
         video { width: 100%; height: auto; transform: scaleX(-1); display: block; object-fit: cover; }
 
-        /* 動態追蹤方框 - 加入陰影與流暢過渡效果 */
         #target-box { position: absolute; border: 3px solid #00ffcc; box-sizing: border-box; pointer-events: none; border-radius: 8px; transition: all 0.1s linear; display: none; box-shadow: 0 0 10px rgba(0, 255, 204, 0.5); z-index: 10;}
         #target-hint { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.7); color: #fff; padding: 5px 15px; font-size: 0.85em; border-radius: 15px; pointer-events: none; white-space: nowrap; z-index: 10; }
 
@@ -83,7 +80,7 @@
                 • 即時運算：所有生理數據均採即時運算處理，運算完成後即釋放。</p>
             </div>
 
-            <p id="loading-text" style="color: yellow; font-weight: bold; text-align: center;">📥 正在載入 AI 引擎 (約需10秒)...</p>
+            <p id="loading-text" style="color: yellow; font-weight: bold; text-align: center;">📥 正在載入 AI 引擎 (約需15秒)...</p>
             <button id="btn-agree" class="btn-primary" style="display:none;" onclick="switchScreen('screen-home')">✅ 我同意</button>
         </div>
     </div>
@@ -157,7 +154,7 @@
         </div>
 
         <div class="stats-grid">
-            <div class="stat-box">AI BPM<span id="ai-bpm" class="stat-val">--</span></div>
+            <div class="stat-box">AI BPM<span id="ai-bpm" class="stat-val" style="font-size: 1.5em;">--</span></div>
             <div class="stat-box">Buffer<span id="ai-buffer" class="stat-val" style="color:#aaa; font-size: 1.2em;">0 / 300</span></div>
             <div class="stat-box">RMSSD<span id="ai-rmssd" class="stat-val" style="color: orange;">--</span></div>
             <div class="stat-box">SDNN<span id="ai-sdnn" class="stat-val" style="color: orange;">--</span></div>
@@ -175,18 +172,15 @@
         let localProfiles = {};
         let mediaStream = null;
 
-        // 訓練倒數變數
         let trainTimer = null;
         let trainSeconds = 0;
         let isTrainingActive = false;
 
-        // FPS 與臉部追蹤變數
         let lastFrameTime = 0;
-        const TARGET_FPS = 30;
-        const frameInterval = 1000 / TARGET_FPS;
         let faceDetector = null;
         let currentForeheadROI = null;
         let frameCount = 0;
+        let isDetectingFace = false; // 防手機卡死鎖
 
         function switchScreen(screenId) {
             document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
@@ -221,7 +215,6 @@
 
                 if(saved) pySyncProfiles(saved);
 
-                // 初始化 MediaPipe Face Detection
                 faceDetector = new FaceDetection({locateFile: (file) => {
                     return `https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/${file}`;
                 }});
@@ -231,7 +224,7 @@
                 document.getElementById('loading-text').style.display = 'none';
                 document.getElementById('btn-agree').style.display = 'block';
             } catch (err) {
-                document.getElementById('loading-text').innerText = "❌ 引擎載入失敗，請重新整理網頁";
+                document.getElementById('loading-text').innerText = "❌ 引擎載入失敗，請檢查網路或重新整理";
             }
         };
 
@@ -288,7 +281,6 @@
             if(isTrainingMode) modeTitle = `訓練模式: ${modeName}`;
             document.getElementById('current-mode-label').innerText = modeTitle;
 
-            // UI 狀態重置
             document.getElementById('train-controls-div').style.display = isTrainingMode ? 'flex' : 'none';
             document.getElementById('btn-start-train').style.display = 'inline';
             document.getElementById('train-time').style.display = 'inline';
@@ -348,18 +340,14 @@
             document.getElementById('train-countdown').style.display = 'none';
         }
 
-        // 解析 MediaPipe 回傳的安全防護機制
         function onFaceDetected(results) {
             if (results.detections && results.detections.length > 0) {
                 const bbox = results.detections[0].boundingBox;
-
-                // 修正部分手機 xMin/yMin 為 undefined 的 Bug，自動透過 Center 換算
                 let width = bbox.width || 0.5;
                 let height = bbox.height || 0.5;
                 let xMin = bbox.xMin !== undefined ? bbox.xMin : (bbox.xCenter - width / 2);
                 let yMin = bbox.yMin !== undefined ? bbox.yMin : (bbox.yCenter - height / 2);
 
-                // 額頭區域：臉部上方 1/4，寬度為臉部 1/2
                 currentForeheadROI = {
                     x: xMin + width * 0.25,
                     y: yMin,
@@ -375,10 +363,10 @@
             if (!mediaStream) return;
             requestAnimationFrame(processFrame);
 
+            // 精確控制 30FPS 擷取 (33.3ms)
             if (!now) now = performance.now();
-            const elapsed = now - lastFrameTime;
-            if (elapsed < frameInterval) return;
-            lastFrameTime = now - (elapsed % frameInterval);
+            if (now - lastFrameTime < 33.3) return;
+            lastFrameTime = now;
 
             const video = document.getElementById('webcam');
             const canvas = document.getElementById('hidden-canvas');
@@ -387,21 +375,25 @@
             if (video.readyState >= 2 && video.videoWidth > 0) {
                 frameCount++;
 
-                // 為了破解 iOS/Safari 的嚴格限制，強制將 Video 繪製到 Canvas，再丟給 AI 辨識
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-                if (frameCount % 5 === 0 && faceDetector) {
-                    // 使用 Canvas 傳給 MediaPipe，而不是直接傳送 video
-                    faceDetector.send({image: canvas}).catch(e => console.log("MediaPipe Error: ", e));
+                // 臉部辨識鎖：確保手機不會因為 AI 運算塞車而當機
+                if (frameCount % 5 === 0 && faceDetector && !isDetectingFace) {
+                    isDetectingFace = true;
+                    faceDetector.send({image: canvas}).then(() => {
+                        isDetectingFace = false;
+                    }).catch(e => {
+                        isDetectingFace = false;
+                        console.log("MediaPipe Error: ", e);
+                    });
                 }
 
                 const boxElement = document.getElementById('target-box');
                 const hintElement = document.getElementById('target-hint');
 
                 if (currentForeheadROI) {
-                    // === 臉部抓取成功：計算真實像素與安全邊界 ===
                     let rx = Math.floor(currentForeheadROI.x * canvas.width);
                     let ry = Math.floor(currentForeheadROI.y * canvas.height);
                     let rw = Math.floor(currentForeheadROI.w * canvas.width);
@@ -410,7 +402,6 @@
                     rx = Math.max(0, rx); ry = Math.max(0, ry);
                     rw = Math.min(canvas.width - rx, rw); rh = Math.min(canvas.height - ry, rh);
 
-                    // 畫面上鏡像反轉的方框計算 (因 CSS scaleX(-1) 左右顛倒)
                     let boxLeft = (1 - (currentForeheadROI.x + currentForeheadROI.w)) * 100;
                     boxElement.style.left = boxLeft + '%';
                     boxElement.style.top = (currentForeheadROI.y * 100) + '%';
@@ -421,7 +412,6 @@
                     hintElement.innerText = "✅ 額頭鎖定中";
                     hintElement.style.color = "#00ffcc";
 
-                    // 確保範圍大於 0 才擷取影像，避免系統當機
                     if (rw > 0 && rh > 0 && !isNaN(rx) && !isNaN(ry)) {
                         try {
                             const frameData = ctx.getImageData(rx, ry, rw, rh).data;
@@ -437,7 +427,6 @@
                     }
 
                 } else {
-                    // === 沒抓到臉：隱藏方框，暫停收集資料 ===
                     boxElement.style.display = 'none';
                     hintElement.innerText = "⚠️ 請將臉部靠近鏡頭";
                     hintElement.style.color = "#ff4d4d";
@@ -447,20 +436,40 @@
                     rgbBuffer.shift();
                 }
 
-                // 只有當緩衝區收集夠多時，才呼叫 Python (加上防呆機制避免崩潰)
+                // 觸發 Python AI 引擎
                 if (rgbBuffer.length > 150 && frameCount % 30 === 0) {
                     try {
-                        const result = pyProcessData(rgbBuffer.flat(), 30.0, polarBpm, currentProfile, isTrainingMode, isTrainingActive).toJs();
+                        // 強制轉換為 Float64Array，避免 Pyodide 陣列轉換遺失資料
+                        const flatData = Float64Array.from(rgbBuffer.flat());
+                        const result = pyProcessData(flatData, 30.0, polarBpm, currentProfile, isTrainingMode, isTrainingActive).toJs();
 
                         let outBpm = result.get ? result.get('bpm') : result.bpm;
                         let outRmssd = result.get ? result.get('rmssd') : result.rmssd;
                         let outSdnn = result.get ? result.get('sdnn') : result.sdnn;
+                        let outErr = result.get ? result.get('error') : result.error;
 
-                        document.getElementById('ai-bpm').innerText = (outBpm > 0) ? outBpm : "--";
-                        document.getElementById('ai-rmssd').innerText = (outRmssd > 0) ? outRmssd : "--";
-                        document.getElementById('ai-sdnn').innerText = (outSdnn > 0) ? outSdnn : "--";
+                        if (outErr) {
+                            hintElement.innerText = "⚠️ AI 錯誤: 需重整";
+                            console.error("Python 錯誤:", outErr);
+                        } else if (outBpm > 0) {
+                            // 成功算出身理數據
+                            document.getElementById('ai-bpm').innerText = outBpm;
+                            document.getElementById('ai-rmssd').innerText = outRmssd;
+                            document.getElementById('ai-sdnn').innerText = outSdnn;
+                        } else {
+                            // 資料不足或雜訊太高時的動態回饋
+                            document.getElementById('ai-bpm').innerText = "計算中...";
+                            document.getElementById('ai-bpm').style.fontSize = "1em";
+                            if (currentForeheadROI) {
+                                hintElement.innerText = "⏳ 運算中...請保持臉部靜止";
+                                hintElement.style.color = "yellow";
+                            }
+                        }
+
+                        if (outBpm > 0) document.getElementById('ai-bpm').style.fontSize = "1.8em";
+
                     } catch (e) {
-                        console.error("AI 運算錯誤:", e);
+                        console.error("AI 呼叫崩潰:", e);
                     }
                 }
 
