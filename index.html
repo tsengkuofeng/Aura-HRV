@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aura Pro Web Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #121212; color: #fff; margin: 0; display: flex; flex-direction: column; align-items: center; }
+        #dashboard { display: none; width: 100%; max-width: 600px; padding: 20px; box-sizing: border-box; }
+        .panel { background-color: #222; border-radius: 10px; padding: 15px; margin-bottom: 15px; }
+        .data-row { display: flex; justify-content: space-between; margin: 10px 0; font-size: 1.2em; }
+        .val { color: #00ffcc; font-weight: bold; }
+        button { background-color: #00aa00; color: white; border: none; padding: 10px 20px; font-size: 1em; border-radius: 5px; cursor: pointer; margin-top: 10px; }
+        button:disabled { background-color: #555; cursor: not-allowed; }
+
+        /* 聲明視窗 (Disclaimer Modal) */
+        #disclaimer { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); display: flex; justify-content: center; align-items: center; z-index: 1000; }
+        .modal-content { background: #fff; color: #000; padding: 30px; border-radius: 10px; max-width: 400px; text-align: left; }
+        .modal-content h2 { color: #00aa00; margin-top: 0; }
+        .terms { background: #f5f5f5; padding: 15px; height: 200px; overflow-y: scroll; font-size: 0.9em; border: 1px solid #ccc; margin-bottom: 15px; }
+    </style>
+</head>
+<body>
+
+    <div id="disclaimer">
+        <div class="modal-content">
+            <h2>⚕ Aura HRV 使用聲明</h2>
+            <div class="terms">
+                <b>【衍生作品聲明】</b><br>
+                Aura HRV 是基於義大利米蘭大學開源專案 pyVHR 進行二次開發。<br><br>
+                <b>【授權條款 GPL-3.0】</b><br>
+                本專案採用 GPL-3.0 授權，所有使用者皆可自由獲取、修改並散佈本專案之原始碼。<br><br>
+                <b>【隱私與即時處理說明】</b><br>
+                • 無影像儲存：本軟體不會錄製或儲存任何影像資料。<br>
+                • 即時運算：所有生理數據均採本機(瀏覽器端)即時運算處理，資料不外洩。<br>
+            </div>
+            <button onclick="acceptTerms()">✅ 同意並繼續</button>
+        </div>
+    </div>
+
+    <div id="dashboard">
+        <h2 style="color: #00aa00; text-align: center;">Aura Pro Dashboard</h2>
+
+        <div class="panel">
+            <h3>系統狀態</h3>
+            <p>Python 引擎: <span id="engine-status" style="color: yellow;">加載中... (需時約10秒)</span></p>
+            <button id="btn-polar" onclick="connectPolar()">🔗 連線 Polar H10 (藍牙)</button>
+            <p style="font-size: 0.8em; color: gray;">*請確認手機已開啟藍牙功能</p>
+        </div>
+
+        <div class="panel">
+            <div class="data-row"><span>Polar BPM:</span> <span id="polar-bpm" class="val">--</span></div>
+            <hr style="border-color: #444;">
+            <div class="data-row"><span>AI BPM:</span> <span id="ai-bpm" class="val" style="color: yellow;">--</span></div>
+            <div class="data-row"><span>SDNN:</span> <span id="ai-sdnn" class="val" style="color: orange;">-- ms</span></div>
+            <div class="data-row"><span>RMSSD:</span> <span id="ai-rmssd" class="val" style="color: orange;">-- ms</span></div>
+        </div>
+    </div>
+
+    <script>
+        let pyodideInstance;
+        let processBiometrics;
+        let polarBpm = 0;
+
+        // 1. 接受聲明並顯示主畫面
+        function acceptTerms() {
+            document.getElementById('disclaimer').style.display = 'none';
+            document.getElementById('dashboard').style.display = 'block';
+            initEngine();
+        }
+
+        // 2. 初始化 Pyodide 與 Python 引擎
+        async function initEngine() {
+            try {
+                pyodideInstance = await loadPyodide();
+                await pyodideInstance.loadPackage(['numpy', 'scipy']);
+
+                // 讀取旁邊的 aura_engine.py
+                const response = await fetch('./aura_engine.py');
+                const pythonCode = await response.text();
+
+                await pyodideInstance.runPythonAsync(pythonCode);
+                processBiometrics = pyodideInstance.globals.get('process_data_from_js');
+
+                document.getElementById('engine-status').innerText = "✅ 準備就緒";
+                document.getElementById('engine-status').style.color = "#00ffcc";
+            } catch (err) {
+                document.getElementById('engine-status').innerText = "❌ 載入失敗";
+                document.getElementById('engine-status').style.color = "red";
+                console.error(err);
+            }
+        }
+
+        // 3. Web Bluetooth API 連線 Polar H10
+        async function connectPolar() {
+            try {
+                const device = await navigator.bluetooth.requestDevice({
+                    filters: [{ services: ['heart_rate'] }]
+                });
+                const server = await device.gatt.connect();
+                const service = await server.getPrimaryService('heart_rate');
+                const characteristic = await service.getCharacteristic('heart_rate_measurement');
+
+                await characteristic.startNotifications();
+                characteristic.addEventListener('characteristicvaluechanged', handleHR);
+
+                document.getElementById('btn-polar').innerText = "✅ Polar 已連線";
+                document.getElementById('btn-polar').disabled = true;
+            } catch (error) {
+                alert("藍牙連線失敗或被拒絕: " + error);
+            }
+        }
+
+        function handleHR(event) {
+            const value = event.target.value;
+            // 根據 GATT 規範解析心率值
+            const flags = value.getUint8(0);
+            const rate16Bits = flags & 0x1;
+            polarBpm = rate16Bits ? value.getUint16(1, true) : value.getUint8(1);
+            document.getElementById('polar-bpm').innerText = polarBpm;
+        }
+
+        // --- 未來擴充區：這裡將會補上 JS 版的 MediaPipe 攝影機畫面擷取 ---
+        // 當抓滿 300 幀 RGB 後，就可以透過這個函數呼叫 Python：
+        // let result = processBiometrics(rgb_flat_array, 30.0, polarBpm, "Public Mode").toJs();
+        // document.getElementById('ai-bpm').innerText = result.get('bpm');
+    </script>
+</body>
+</html>
