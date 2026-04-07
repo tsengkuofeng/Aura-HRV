@@ -3,15 +3,14 @@ from scipy import signal
 import json
 
 
-# 模擬資料庫 (在瀏覽器中會存在記憶體中)
 class WebProfileManager:
     def __init__(self):
         self.profiles = {"Public Mode": {"c_R": 3.0, "c_G": 2.0, "baseline_bpm": 75.0, "trained": False}}
         self.current_user = "Public Mode"
 
     def update_learning(self, bpm_truth, r_mean, g_mean):
-        p = self.profiles[self.current_user]
-        if not p.get("trained", False): return
+        p = self.profiles.get(self.current_user)
+        if not p or not p.get("trained", False): return
 
         opt_R = r_mean / g_mean if g_mean > 0 else 3.0
         p["c_R"] = (p["c_R"] * 0.95) + (opt_R * 0.05)
@@ -21,13 +20,21 @@ class WebProfileManager:
 engine = WebProfileManager()
 
 
-def process_data_from_js(rgb_data, fps, polar_bpm, profile_name):
-    """
-    接收 JavaScript 傳來的數據 (rgb_data 是一個扁平化的 list)
-    """
-    engine.current_user = profile_name
+# --- 給 JS 呼叫的記憶同步函數 ---
+def sync_profiles(json_str):
+    try:
+        data = json.loads(json_str)
+        engine.profiles.update(data)
+    except:
+        pass
 
-    # 將 JS 傳來的 1D 陣列轉回 Numpy 2D 陣列 (Frames x 3)
+
+def export_profiles():
+    return json.dumps(engine.profiles)
+
+
+def process_data_from_js(rgb_data, fps, polar_bpm, profile_name, is_training):
+    engine.current_user = profile_name
     buffer = np.array(rgb_data).reshape(-1, 3)
 
     if len(buffer) < 300:
@@ -37,7 +44,6 @@ def process_data_from_js(rgb_data, fps, polar_bpm, profile_name):
         R, G, B = buffer[:, 0], buffer[:, 1], buffer[:, 2]
         p = engine.profiles.get(profile_name, engine.profiles["Public Mode"])
 
-        # CHROM 光學模型
         X = p["c_R"] * R - p["c_G"] * G
         Y = 1.5 * R + G - 1.5 * B
 
@@ -47,10 +53,9 @@ def process_data_from_js(rgb_data, fps, polar_bpm, profile_name):
         bvp = signal.detrend(X - alpha * Y)
 
         nyq = fps / 2
-        is_personal = (profile_name != "Public Mode")
 
-        # 濾波與學習鎖定邏輯
-        if is_personal and polar_bpm > 30:
+        # 判斷是否啟動訓練模式 (需配戴 Polar 且明確指定訓練)
+        if is_training and polar_bpm > 30:
             target_hz = polar_bpm / 60.0
             low_cut = max(0.5, target_hz - 0.25) / nyq
             high_cut = min(3.0, target_hz + 0.25) / nyq
@@ -77,7 +82,6 @@ def process_data_from_js(rgb_data, fps, polar_bpm, profile_name):
                 rmssd = rmssd if rmssd < 120 else 0
                 sdnn = np.std(valid_rr)
 
-        # 回傳 Dictionary，Pyodide 會自動將它轉成 JavaScript 的 Object
         return {"bpm": round(bpm, 1), "rmssd": round(rmssd, 1), "sdnn": round(sdnn, 1)}
     except Exception as e:
         return {"bpm": 0, "rmssd": 0, "sdnn": 0, "error": str(e)}
