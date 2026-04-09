@@ -49,8 +49,11 @@
 
         #video-container { position: relative; width: 100%; max-width: 400px; margin: 15px auto; border: 2px solid #444; border-radius: 10px; overflow: hidden; background: #000; display: flex; line-height: 0; }
         video { width: 100%; height: auto; transform: scaleX(-1); display: block; object-fit: cover; }
+        #canvas-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
 
-        #target-box { position: absolute; border: 3px solid #00ffcc; box-sizing: border-box; pointer-events: none; border-radius: 8px; transition: all 0.1s linear; display: none; box-shadow: 0 0 10px rgba(0, 255, 204, 0.5); z-index: 10;}
+        /* 原本的 target-box 改為隱藏，我們改用 canvas-overlay 畫更精細的雙重框與波形 */
+        #target-box { display: none !important; }
+
         #target-hint { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: #fff; padding: 5px 15px; font-size: 0.85em; border-radius: 15px; pointer-events: none; white-space: nowrap; z-index: 10; }
 
         .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; max-width: 400px; padding: 0 15px; margin-bottom: 20px;}
@@ -91,6 +94,10 @@
                 <h4>【隱私與即時處理說明】</h4>
                 <p>• 無影像儲存：本軟體不會錄製或儲存任何影像資料。<br>
                 • 即時運算：所有生理數據均採即時運算處理，運算完成後即釋放。</p>
+
+                <p style="color: #ff4d4d; font-weight: bold; margin-top: 20px; text-align: center; border: 1px solid #ff4d4d; padding: 10px; border-radius: 5px;">
+                    ⚠️ Aura HRV分析所有數據僅供參考，請勿做為醫學診斷！
+                </p>
             </div>
 
             <p id="loading-text" style="color: yellow; font-weight: bold; text-align: center;">📥 正在載入 AI 引擎 (約需15秒)...</p>
@@ -163,8 +170,8 @@
 
         <div id="video-container">
             <video id="webcam" autoplay playsinline webkit-playsinline muted></video>
-            <div id="target-box"></div>
-            <div id="target-hint">⚠️ 等待影像載入中...</div>
+            <canvas id="canvas-overlay"></canvas>
+            <div id="target-box"></div> <div id="target-hint">⚠️ 等待影像載入中...</div>
             <canvas id="hidden-canvas" style="display:none;"></canvas>
         </div>
 
@@ -252,7 +259,12 @@
 
         let lastFrameTime = 0;
         let faceDetector = null;
+
+        // 儲存完整人臉特徵，用於畫大綠框
+        let currentFaceROI = null;
+        // 儲存額頭特徵，用於畫黃色小框與提取像素
         let currentForeheadROI = null;
+
         let frameCount = 0;
         let isDetectingFace = false;
 
@@ -281,6 +293,11 @@
             document.getElementById('ai-bpm').innerText = "--";
             document.getElementById('ai-rmssd').innerText = "--";
             document.getElementById('ai-sdnn').innerText = "--";
+
+            // 清理畫布
+            const overlay = document.getElementById('canvas-overlay');
+            const octx = overlay.getContext('2d');
+            octx.clearRect(0, 0, overlay.width, overlay.height);
         }
 
         function goHome() {
@@ -511,6 +528,15 @@
                 let xMin = bbox.xMin !== undefined ? bbox.xMin : (bbox.xCenter - width / 2);
                 let yMin = bbox.yMin !== undefined ? bbox.yMin : (bbox.yCenter - height / 2);
 
+                // 紀錄完整人臉範圍
+                currentFaceROI = {
+                    x: xMin,
+                    y: yMin,
+                    w: width,
+                    h: height
+                };
+
+                // 紀錄額頭範圍
                 currentForeheadROI = {
                     x: xMin + width * 0.25,
                     y: yMin,
@@ -518,6 +544,7 @@
                     h: height * 0.25
                 };
             } else {
+                currentFaceROI = null;
                 currentForeheadROI = null;
             }
         }
@@ -533,6 +560,17 @@
             const video = document.getElementById('webcam');
             const canvas = document.getElementById('hidden-canvas');
             const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+            // 獲取繪圖 overlay 的 context
+            const overlay = document.getElementById('canvas-overlay');
+
+            // 同步 overlay 與 video 的大小
+            if(overlay.width !== video.clientWidth) {
+                overlay.width = video.clientWidth;
+                overlay.height = video.clientHeight;
+            }
+            const octx = overlay.getContext('2d');
+            octx.clearRect(0, 0, overlay.width, overlay.height);
 
             if (video.readyState >= 2 && video.videoWidth > 0) {
                 frameCount++;
@@ -550,10 +588,35 @@
                     });
                 }
 
-                const boxElement = document.getElementById('target-box');
                 const hintElement = document.getElementById('target-hint');
 
-                if (currentForeheadROI) {
+                if (currentFaceROI && currentForeheadROI) {
+                    // 計算縮放比例 (因為 video 有 object-fit: cover 並且 scaleX(-1) 翻轉過)
+                    // 在這裡我們需要把 MediaPipe 的 0~1 座標轉換到 overlay 的實際像素座標
+
+                    // 注意：因為外層有 transform: scaleX(-1)，影像左右相反
+                    // 所以畫框的時候 x 座標也要反轉： 1 - (原x + 原w)
+                    let drawFaceX = (1 - (currentFaceROI.x + currentFaceROI.w)) * overlay.width;
+                    let drawFaceY = currentFaceROI.y * overlay.height;
+                    let drawFaceW = currentFaceROI.w * overlay.width;
+                    let drawFaceH = currentFaceROI.h * overlay.height;
+
+                    let drawFhX = (1 - (currentForeheadROI.x + currentForeheadROI.w)) * overlay.width;
+                    let drawFhY = currentForeheadROI.y * overlay.height;
+                    let drawFhW = currentForeheadROI.w * overlay.width;
+                    let drawFhH = currentForeheadROI.h * overlay.height;
+
+                    // 1. 畫出整個人臉的綠色大框
+                    octx.strokeStyle = 'rgba(0, 255, 0, 0.7)';
+                    octx.lineWidth = 2;
+                    octx.strokeRect(drawFaceX, drawFaceY, drawFaceW, drawFaceH);
+
+                    // 2. 畫出額頭的黃色小框
+                    octx.strokeStyle = 'rgba(255, 235, 59, 0.8)';
+                    octx.lineWidth = 2;
+                    octx.strokeRect(drawFhX, drawFhY, drawFhW, drawFhH);
+
+                    // 擷取像素 (用於計算的隱藏 canvas 不需要反轉座標)
                     let rx = Math.floor(currentForeheadROI.x * canvas.width);
                     let ry = Math.floor(currentForeheadROI.y * canvas.height);
                     let rw = Math.floor(currentForeheadROI.w * canvas.width);
@@ -561,13 +624,6 @@
 
                     rx = Math.max(0, rx); ry = Math.max(0, ry);
                     rw = Math.min(canvas.width - rx, rw); rh = Math.min(canvas.height - ry, rh);
-
-                    let boxLeft = (1 - (currentForeheadROI.x + currentForeheadROI.w)) * 100;
-                    boxElement.style.left = boxLeft + '%';
-                    boxElement.style.top = (currentForeheadROI.y * 100) + '%';
-                    boxElement.style.width = (currentForeheadROI.w * 100) + '%';
-                    boxElement.style.height = (currentForeheadROI.h * 100) + '%';
-                    boxElement.style.display = 'block';
 
                     if (rw > 0 && rh > 0 && !isNaN(rx) && !isNaN(ry)) {
                         try {
@@ -583,8 +639,47 @@
                         }
                     }
 
+                    // 3. 在人臉框的右側畫出微型純紅跳動波形 (無背景)
+                    if (rgbBuffer.length > 10) {
+                        // 波形畫在人臉大框的右邊 (因為左右反轉，所以其實是左邊 drawFaceX - waveW - 10)
+                        // 為了讓使用者看起來在右邊，我們計算：
+                        const waveW = 60;
+                        const waveH = 40;
+                        // 確保波形不會畫出畫面外
+                        let waveX = drawFaceX + drawFaceW + 10;
+                        if(waveX + waveW > overlay.width) {
+                            waveX = drawFaceX - waveW - 10; // 改畫到另一邊
+                        }
+                        const waveY = drawFaceY + (drawFaceH * 0.2);
+
+                        // 取最近 60 筆綠光資料並平滑化
+                        const recentG = rgbBuffer.slice(-60).map(v => v[1]);
+                        const smoothed = [];
+                        for(let i = 0; i < recentG.length; i++) {
+                            if (i === 0 || i === recentG.length - 1) smoothed.push(recentG[i]);
+                            else smoothed.push((recentG[i-1] + recentG[i]*2 + recentG[i+1]) / 4);
+                        }
+
+                        const minG = Math.min(...smoothed);
+                        const maxG = Math.max(...smoothed);
+                        const range = (maxG - minG) || 1;
+
+                        octx.beginPath();
+                        octx.strokeStyle = '#ff3333'; // 純紅色
+                        octx.lineWidth = 2;
+                        octx.lineJoin = 'round';
+
+                        for (let i = 0; i < smoothed.length; i++) {
+                            const px = waveX + (i / (smoothed.length - 1)) * waveW;
+                            const py = waveY + waveH - ((smoothed[i] - minG) / range) * waveH;
+
+                            if (i === 0) octx.moveTo(px, py);
+                            else octx.lineTo(px, py);
+                        }
+                        octx.stroke();
+                    }
+
                 } else {
-                    boxElement.style.display = 'none';
                     hintElement.innerText = "⚠️ 請將臉部靠近鏡頭";
                     hintElement.style.color = "#ff4d4d";
                 }
