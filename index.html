@@ -51,7 +51,6 @@
         video { width: 100%; height: auto; transform: scaleX(-1); display: block; object-fit: cover; }
         #canvas-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
 
-        /* 原本的 target-box 改為隱藏，我們改用 canvas-overlay 畫更精細的雙重框與波形 */
         #target-box { display: none !important; }
 
         #target-hint { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: #fff; padding: 5px 15px; font-size: 0.85em; border-radius: 15px; pointer-events: none; white-space: nowrap; z-index: 10; }
@@ -60,7 +59,6 @@
         .stat-box { background: #1e1e1e; padding: 15px; border-radius: 10px; text-align: center; }
         .stat-val { font-size: 1.8em; color: #00ffcc; display: block; margin-top: 5px; font-weight: bold;}
 
-        /* 報告頁面專屬樣式 */
         .report-container { width: 100%; max-width: 500px; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; padding-bottom: 40px;}
         .report-card { background: #1e1e1e; border-radius: 15px; padding: 20px; border: 1px solid #333; text-align: center; }
         .report-val { font-size: 2.5em; color: #00ffcc; font-weight: bold; margin: 10px 0; }
@@ -96,7 +94,7 @@
                 • 即時運算：所有生理數據均採即時運算處理，運算完成後即釋放。</p>
 
                 <p style="color: #ff4d4d; font-weight: bold; margin-top: 20px; text-align: center; border: 1px solid #ff4d4d; padding: 10px; border-radius: 5px;">
-                    ⚠️ Aura HRV分析所有數據僅供參考，請勿做為醫學診斷
+                    ⚠️ Aura HRV分析所有數據僅供參考，請勿做為醫學診斷！
                 </p>
             </div>
 
@@ -171,7 +169,8 @@
         <div id="video-container">
             <video id="webcam" autoplay playsinline webkit-playsinline muted></video>
             <canvas id="canvas-overlay"></canvas>
-            <div id="target-box"></div> <div id="target-hint">⚠️ 等待影像載入中...</div>
+            <div id="target-box"></div>
+            <div id="target-hint">⚠️ 等待影像載入中...</div>
             <canvas id="hidden-canvas" style="display:none;"></canvas>
         </div>
 
@@ -260,15 +259,13 @@
         let lastFrameTime = 0;
         let faceDetector = null;
 
-        // 儲存完整人臉特徵，用於畫大綠框
-        let currentFaceROI = null;
-        // 儲存額頭特徵，用於畫黃色小框與提取像素
-        let currentForeheadROI = null;
+        // 【新增】平滑化用的 ROI 變數，防止框框亂跳
+        let smoothedFaceROI = null;
+        let smoothedForeheadROI = null;
 
         let frameCount = 0;
         let isDetectingFace = false;
 
-        // 收集單次測量數據，用於產出報告
         let sessionStats = {
             bpm: [],
             rmssd: [],
@@ -280,7 +277,6 @@
             document.getElementById(screenId).classList.add('active');
         }
 
-        // 統一的清理資源函數
         function cleanupSession() {
             if(mediaStream) {
                 mediaStream.getTracks().forEach(t => t.stop());
@@ -294,7 +290,9 @@
             document.getElementById('ai-rmssd').innerText = "--";
             document.getElementById('ai-sdnn').innerText = "--";
 
-            // 清理畫布
+            // 清理畫布與追蹤框記憶
+            smoothedFaceROI = null;
+            smoothedForeheadROI = null;
             const overlay = document.getElementById('canvas-overlay');
             const octx = overlay.getContext('2d');
             octx.clearRect(0, 0, overlay.width, overlay.height);
@@ -420,7 +418,6 @@
             if(isTrainingMode) modeTitle = `訓練模式: ${modeName}`;
             document.getElementById('current-mode-label').innerText = modeTitle;
 
-            // 調整 UI 顯示狀態，無論模式都顯示計時器，隱藏報告按鈕
             document.getElementById('timer-controls-div').style.display = 'flex';
             document.getElementById('btn-start-timer').innerText = isTrainingMode ? "開始訓練" : "開始測量";
             document.getElementById('btn-start-timer').style.background = isTrainingMode ? "#ff7700" : "#00aa00";
@@ -434,12 +431,26 @@
             switchScreen('screen-dashboard');
 
             try {
-                mediaStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+                // 【核心升級】加入強制手動對焦/曝光參數 (嘗試抑制手機的自動跳光干擾)
+                const constraints = {
+                    video: {
+                        facingMode: "user",
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        frameRate: { ideal: 30 },
+                        advanced: [{ exposureMode: "manual", focusMode: "manual", whiteBalanceMode: "manual" }]
+                    },
+                    audio: false
+                };
+
+                mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
                 const video = document.getElementById('webcam');
                 video.srcObject = mediaStream;
                 video.play();
 
                 rgbBuffer = [];
+                smoothedFaceROI = null;
+                smoothedForeheadROI = null;
                 requestAnimationFrame(processFrame);
             } catch (err) {
                 alert("無法存取攝影機：" + err.message);
@@ -448,13 +459,11 @@
         }
 
         function startTimer() {
-            // 如果是訓練模式，強制要求 Polar 心跳帶連線
             if(isTrainingMode && polarBpm === 0) {
                 alert("請先確認 Polar 心跳帶已連線並抓到數據！");
                 return;
             }
 
-            // 清空舊的測量紀錄，確保報告只統計倒數期間內的數據
             sessionStats = { bpm: [], rmssd: [], sdnn: [] };
 
             const sel = document.getElementById('timer-select');
@@ -479,7 +488,7 @@
                     isTrainingActive = false;
 
                     document.getElementById('timer-countdown').innerText = isTrainingMode ? "訓練完成" : "測量完成";
-                    document.getElementById('btn-report').style.display = 'inline'; // 倒數結束顯示報告按鈕
+                    document.getElementById('btn-report').style.display = 'inline';
 
                     if (isTrainingMode) {
                         document.getElementById('btn-save-train').style.display = 'inline';
@@ -520,6 +529,9 @@
             document.getElementById('btn-save-train').style.display = 'none';
         }
 
+        // ==========================================
+        // 【核心升級】低通濾波追蹤框與位置微調
+        // ==========================================
         function onFaceDetected(results) {
             if (results.detections && results.detections.length > 0) {
                 const bbox = results.detections[0].boundingBox;
@@ -528,24 +540,34 @@
                 let xMin = bbox.xMin !== undefined ? bbox.xMin : (bbox.xCenter - width / 2);
                 let yMin = bbox.yMin !== undefined ? bbox.yMin : (bbox.yCenter - height / 2);
 
-                // 紀錄完整人臉範圍
-                currentFaceROI = {
-                    x: xMin,
-                    y: yMin,
-                    w: width,
-                    h: height
+                // 計算最新的原始座標
+                let newFaceROI = { x: xMin, y: yMin, w: width, h: height };
+
+                // [修改] 解決框框壓眼睛的問題：y軸往上偏移，高度縮短！
+                let newForeheadROI = {
+                    x: xMin + width * 0.25,
+                    y: yMin - (height * 0.05), // 往上拉出臉框一點避開眼睛
+                    w: width * 0.5,
+                    h: height * 0.15           // 縮減高度，只保留最乾淨的額頭中心
                 };
 
-                // 紀錄額頭範圍
-                currentForeheadROI = {
-                    x: xMin + width * 0.25,
-                    y: yMin,
-                    w: width * 0.5,
-                    h: height * 0.25
-                };
-            } else {
-                currentFaceROI = null;
-                currentForeheadROI = null;
+                // [修改] 解決框框閃爍問題：加入平滑化 (EMA 濾波)
+                if (!smoothedFaceROI) {
+                    smoothedFaceROI = newFaceROI;
+                    smoothedForeheadROI = newForeheadROI;
+                } else {
+                    const alpha = 0.15; // 平滑係數，越小越穩定但不跟手，0.15是適中數值
+
+                    smoothedFaceROI.x = smoothedFaceROI.x * (1 - alpha) + newFaceROI.x * alpha;
+                    smoothedFaceROI.y = smoothedFaceROI.y * (1 - alpha) + newFaceROI.y * alpha;
+                    smoothedFaceROI.w = smoothedFaceROI.w * (1 - alpha) + newFaceROI.w * alpha;
+                    smoothedFaceROI.h = smoothedFaceROI.h * (1 - alpha) + newFaceROI.h * alpha;
+
+                    smoothedForeheadROI.x = smoothedForeheadROI.x * (1 - alpha) + newForeheadROI.x * alpha;
+                    smoothedForeheadROI.y = smoothedForeheadROI.y * (1 - alpha) + newForeheadROI.y * alpha;
+                    smoothedForeheadROI.w = smoothedForeheadROI.w * (1 - alpha) + newForeheadROI.w * alpha;
+                    smoothedForeheadROI.h = smoothedForeheadROI.h * (1 - alpha) + newForeheadROI.h * alpha;
+                }
             }
         }
 
@@ -561,10 +583,8 @@
             const canvas = document.getElementById('hidden-canvas');
             const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
-            // 獲取繪圖 overlay 的 context
             const overlay = document.getElementById('canvas-overlay');
 
-            // 同步 overlay 與 video 的大小
             if(overlay.width !== video.clientWidth) {
                 overlay.width = video.clientWidth;
                 overlay.height = video.clientHeight;
@@ -590,21 +610,17 @@
 
                 const hintElement = document.getElementById('target-hint');
 
-                if (currentFaceROI && currentForeheadROI) {
-                    // 計算縮放比例 (因為 video 有 object-fit: cover 並且 scaleX(-1) 翻轉過)
-                    // 在這裡我們需要把 MediaPipe 的 0~1 座標轉換到 overlay 的實際像素座標
+                // 使用平滑化過後的座標來畫框與取樣
+                if (smoothedFaceROI && smoothedForeheadROI) {
+                    let drawFaceX = (1 - (smoothedFaceROI.x + smoothedFaceROI.w)) * overlay.width;
+                    let drawFaceY = smoothedFaceROI.y * overlay.height;
+                    let drawFaceW = smoothedFaceROI.w * overlay.width;
+                    let drawFaceH = smoothedFaceROI.h * overlay.height;
 
-                    // 注意：因為外層有 transform: scaleX(-1)，影像左右相反
-                    // 所以畫框的時候 x 座標也要反轉： 1 - (原x + 原w)
-                    let drawFaceX = (1 - (currentFaceROI.x + currentFaceROI.w)) * overlay.width;
-                    let drawFaceY = currentFaceROI.y * overlay.height;
-                    let drawFaceW = currentFaceROI.w * overlay.width;
-                    let drawFaceH = currentFaceROI.h * overlay.height;
-
-                    let drawFhX = (1 - (currentForeheadROI.x + currentForeheadROI.w)) * overlay.width;
-                    let drawFhY = currentForeheadROI.y * overlay.height;
-                    let drawFhW = currentForeheadROI.w * overlay.width;
-                    let drawFhH = currentForeheadROI.h * overlay.height;
+                    let drawFhX = (1 - (smoothedForeheadROI.x + smoothedForeheadROI.w)) * overlay.width;
+                    let drawFhY = smoothedForeheadROI.y * overlay.height;
+                    let drawFhW = smoothedForeheadROI.w * overlay.width;
+                    let drawFhH = smoothedForeheadROI.h * overlay.height;
 
                     // 1. 畫出整個人臉的綠色大框
                     octx.strokeStyle = 'rgba(0, 255, 0, 0.7)';
@@ -616,11 +632,11 @@
                     octx.lineWidth = 2;
                     octx.strokeRect(drawFhX, drawFhY, drawFhW, drawFhH);
 
-                    // 擷取像素 (用於計算的隱藏 canvas 不需要反轉座標)
-                    let rx = Math.floor(currentForeheadROI.x * canvas.width);
-                    let ry = Math.floor(currentForeheadROI.y * canvas.height);
-                    let rw = Math.floor(currentForeheadROI.w * canvas.width);
-                    let rh = Math.floor(currentForeheadROI.h * canvas.height);
+                    // 擷取像素 (不反轉，用原始攝影機畫布位置)
+                    let rx = Math.floor(smoothedForeheadROI.x * canvas.width);
+                    let ry = Math.floor(smoothedForeheadROI.y * canvas.height);
+                    let rw = Math.floor(smoothedForeheadROI.w * canvas.width);
+                    let rh = Math.floor(smoothedForeheadROI.h * canvas.height);
 
                     rx = Math.max(0, rx); ry = Math.max(0, ry);
                     rw = Math.min(canvas.width - rx, rw); rh = Math.min(canvas.height - ry, rh);
@@ -639,20 +655,16 @@
                         }
                     }
 
-                    // 3. 在人臉框的右側畫出微型純紅跳動波形 (無背景)
+                    // 3. 在人臉框的旁邊畫出微型純紅波形
                     if (rgbBuffer.length > 10) {
-                        // 波形畫在人臉大框的右邊 (因為左右反轉，所以其實是左邊 drawFaceX - waveW - 10)
-                        // 為了讓使用者看起來在右邊，我們計算：
                         const waveW = 60;
                         const waveH = 40;
-                        // 確保波形不會畫出畫面外
                         let waveX = drawFaceX + drawFaceW + 10;
                         if(waveX + waveW > overlay.width) {
-                            waveX = drawFaceX - waveW - 10; // 改畫到另一邊
+                            waveX = drawFaceX - waveW - 10;
                         }
                         const waveY = drawFaceY + (drawFaceH * 0.2);
 
-                        // 取最近 60 筆綠光資料並平滑化
                         const recentG = rgbBuffer.slice(-60).map(v => v[1]);
                         const smoothed = [];
                         for(let i = 0; i < recentG.length; i++) {
@@ -665,7 +677,7 @@
                         const range = (maxG - minG) || 1;
 
                         octx.beginPath();
-                        octx.strokeStyle = '#ff3333'; // 純紅色
+                        octx.strokeStyle = '#ff3333';
                         octx.lineWidth = 2;
                         octx.lineJoin = 'round';
 
@@ -708,7 +720,6 @@
                             document.getElementById('ai-rmssd').innerText = outRmssd;
                             document.getElementById('ai-sdnn').innerText = outSdnn;
 
-                            // 只有在按下「開始測量/訓練」進入計時狀態時，才將數據收集至報告陣列
                             if (isTrainingActive) {
                                 sessionStats.bpm.push(outBpm);
                                 sessionStats.rmssd.push(outRmssd);
@@ -720,7 +731,7 @@
                         } else {
                             document.getElementById('ai-bpm').innerText = "運算中";
                             document.getElementById('ai-bpm').style.fontSize = "1.2em";
-                            if (currentForeheadROI) {
+                            if (smoothedForeheadROI) {
                                 hintElement.innerText = `⏳ 擷取波峰中 (${outPeaks}/4)... 請保持靜止`;
                                 hintElement.style.color = "yellow";
                             }
@@ -734,9 +745,7 @@
             }
         }
 
-        // 產生並顯示報告
         function generateReport() {
-            // 先清理攝影機與引擎負載
             cleanupSession();
 
             const count = sessionStats.bpm.length;
@@ -747,12 +756,10 @@
                 return;
             }
 
-            // 計算平均值
             const avgBpm = sessionStats.bpm.reduce((a, b) => a + b, 0) / count;
             const avgRmssd = sessionStats.rmssd.reduce((a, b) => a + b, 0) / count;
             const avgSdnn = sessionStats.sdnn.reduce((a, b) => a + b, 0) / count;
 
-            // 判斷常模評估狀態
             let rmssdEval = avgRmssd < 20 ? "<span style='font-size: 0.45em; color: #ff4d4d;'><br>(偏低)</span>" :
                            (avgRmssd <= 50 ? "<span style='font-size: 0.45em; color: #fff;'><br>(正常)</span>" :
                                              "<span style='font-size: 0.45em; color: #00ffcc;'><br>(良好)</span>");
@@ -761,13 +768,11 @@
                           (avgSdnn <= 50 ? "<span style='font-size: 0.45em; color: #fff;'><br>(正常)</span>" :
                                             "<span style='font-size: 0.45em; color: #00ffcc;'><br>(良好)</span>");
 
-            // 更新報告頁面 DOM
             document.getElementById('report-count').innerText = count;
             document.getElementById('report-bpm').innerText = Math.round(avgBpm);
             document.getElementById('report-rmssd').innerHTML = Math.round(avgRmssd) + rmssdEval;
             document.getElementById('report-sdnn').innerHTML = Math.round(avgSdnn) + sdnnEval;
 
-            // 切換到報告畫面
             switchScreen('screen-report');
         }
 
