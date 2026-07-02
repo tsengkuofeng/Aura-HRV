@@ -8,7 +8,13 @@
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_detection/face_detection.js"></script>
     <style>
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background-color: #121212; color: #fff; margin: 0; padding: 0; overflow-x: hidden; }
+        body { background-color: #121212; color: #fff; margin: 0; padding: 0; overflow-x: hidden; transition: background-color 0.3s ease; }
+
+        /* 【新增】測量時把背景切成白色當補光源：光線不足時相機會拉高ISO，
+           雜訊會蓋過血液顏色的微小變化，這是準確度的關鍵瓶頸之一。
+           用白色(非彩色)是為了不干擾 POS/CHROM 演算法對中性光源的假設。 */
+        body.bright-mode { background-color: #ffffff; }
+        body.bright-mode #brightness-hint { display: flex; }
 
         .screen { display: none; width: 100vw; height: 100vh; flex-direction: column; align-items: center; justify-content: flex-start; }
         .screen.active { display: flex; }
@@ -46,6 +52,9 @@
         .top-info-bar { width: 100%; background: #111; padding: 10px 15px; border-bottom: 1px solid #333; display: flex; align-items: center; justify-content: space-between; font-size: 0.95em;}
         .polar-display { color: #00ffcc; font-weight: bold; display: flex; align-items: center; gap: 10px;}
         .train-controls { display: flex; align-items: center; gap: 10px; }
+
+        /* 【新增】補光提示：只在 bright-mode 開啟(鏡頭啟動中)時才顯示 */
+        #brightness-hint { display: none; align-items: center; justify-content: center; gap: 8px; width: 100%; max-width: 400px; margin: 0 auto 10px auto; padding: 8px 15px; background: #fff3cd; color: #664d03; border: 1px solid #ffe69c; border-radius: 10px; font-size: 0.85em; font-weight: bold; text-align: center; box-sizing: border-box; }
 
         #video-container { position: relative; width: 100%; max-width: 400px; margin: 15px auto; border: 2px solid #444; border-radius: 10px; overflow: hidden; background: #000; display: flex; line-height: 0; }
         video { width: 100%; height: auto; transform: scaleX(-1); display: block; object-fit: cover; }
@@ -167,6 +176,8 @@
             </div>
         </div>
 
+        <div id="brightness-hint">💡 請將螢幕亮度調到最高，白色背景可補光、提升量測準確度</div>
+
         <div id="video-container">
             <video id="webcam" autoplay playsinline webkit-playsinline muted></video>
             <canvas id="canvas-overlay"></canvas>
@@ -286,6 +297,8 @@
                 mediaStream.getTracks().forEach(t => t.stop());
                 mediaStream = null;
             }
+            // 【新增】結束/離開時把背景切回深色，隱藏補光提示
+            document.body.classList.remove('bright-mode');
             if(trainTimer) clearInterval(trainTimer);
             isTrainingActive = false;
             rgbBuffer = [];
@@ -445,20 +458,19 @@
                 // 會直接忽略這組 advanced 限制，等於沒有真的關閉自動曝光(AGC)，
                 // 反而讓人誤以為雜訊已被抑制。目前雜訊抑制改依賴訊號端的正規化
                 // (POS 演算法的時間平均正規化) 與新增的 SNR 品質門檻來處理。
-                const constraints = {
-                    video: {
-                        facingMode: "user",
-                        width: { ideal: 640 },
-                        height: { ideal: 480 },
-                        frameRate: { ideal: 30 }
-                    },
-                    audio: false
-                };
-
-                mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+                //
+                // 【新增】筆電/桌機相容：手機上需要 facingMode:"user" 才會拿到前鏡頭，
+                // 但一般筆電/桌機的鏡頭沒有「前後鏡頭」概念，某些瀏覽器/驅動組合在指定
+                // facingMode 時反而會回報「找不到裝置」(NotFoundError)。這裡改成依序嘗試
+                // 由嚴格到寬鬆的限制條件，只要其中一組成功就繼續，讓同一份程式碼在手機、
+                // 筆電、桌機外接攝影機都測得起來。
+                mediaStream = await getCameraStreamWithFallback();
                 const video = document.getElementById('webcam');
                 video.srcObject = mediaStream;
                 video.play();
+
+                // 【新增】鏡頭成功開啟後，背景切白補光 + 顯示調亮度提示
+                document.body.classList.add('bright-mode');
 
                 rgbBuffer = [];
                 tsBuffer = [];
@@ -468,9 +480,32 @@
                 smoothedRightCheekROI = null;
                 requestAnimationFrame(processFrame);
             } catch (err) {
-                alert("無法存取攝影機：" + err.message);
+                alert("無法存取攝影機：" + err.message + "\n\n請確認：\n1. 這台裝置有可用的攝影機\n2. 瀏覽器已取得攝影機權限（網址列旁的鎖頭圖示可查看）\n3. 沒有其他程式正在佔用攝影機");
                 goHome();
             }
+        }
+
+        // 【新增】依序嘗試多組 getUserMedia 限制條件，兼容手機前鏡頭與筆電/桌機一般鏡頭
+        async function getCameraStreamWithFallback() {
+            const attempts = [
+                // 1. 手機優先：前鏡頭 + 理想解析度/幀率
+                { video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } }, audio: false },
+                // 2. 筆電/桌機：不指定 facingMode，只給理想解析度/幀率
+                { video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } }, audio: false },
+                // 3. 最寬鬆：什麼限制都不加，交給瀏覽器自己決定
+                { video: true, audio: false }
+            ];
+
+            let lastErr = null;
+            for (const constraints of attempts) {
+                try {
+                    return await navigator.mediaDevices.getUserMedia(constraints);
+                } catch (err) {
+                    lastErr = err;
+                    console.warn("攝影機限制條件失敗，嘗試下一組:", constraints, err.name, err.message);
+                }
+            }
+            throw lastErr;
         }
 
         function startTimer() {
