@@ -445,17 +445,13 @@
                 // 會直接忽略這組 advanced 限制，等於沒有真的關閉自動曝光(AGC)，
                 // 反而讓人誤以為雜訊已被抑制。目前雜訊抑制改依賴訊號端的正規化
                 // (POS 演算法的時間平均正規化) 與新增的 SNR 品質門檻來處理。
-                const constraints = {
-                    video: {
-                        facingMode: "user",
-                        width: { ideal: 640 },
-                        height: { ideal: 480 },
-                        frameRate: { ideal: 30 }
-                    },
-                    audio: false
-                };
-
-                mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+                //
+                // 【新增】筆電/桌機相容：手機上需要 facingMode:"user" 才會拿到前鏡頭，
+                // 但一般筆電/桌機的鏡頭沒有「前後鏡頭」概念，某些瀏覽器/驅動組合在指定
+                // facingMode 時反而會回報「找不到裝置」(NotFoundError)。這裡改成依序嘗試
+                // 由嚴格到寬鬆的限制條件，只要其中一組成功就繼續，讓同一份程式碼在手機、
+                // 筆電、桌機外接攝影機都測得起來。
+                mediaStream = await getCameraStreamWithFallback();
                 const video = document.getElementById('webcam');
                 video.srcObject = mediaStream;
                 video.play();
@@ -468,9 +464,32 @@
                 smoothedRightCheekROI = null;
                 requestAnimationFrame(processFrame);
             } catch (err) {
-                alert("無法存取攝影機：" + err.message);
+                alert("無法存取攝影機：" + err.message + "\n\n請確認：\n1. 這台裝置有可用的攝影機\n2. 瀏覽器已取得攝影機權限（網址列旁的鎖頭圖示可查看）\n3. 沒有其他程式正在佔用攝影機");
                 goHome();
             }
+        }
+
+        // 【新增】依序嘗試多組 getUserMedia 限制條件，兼容手機前鏡頭與筆電/桌機一般鏡頭
+        async function getCameraStreamWithFallback() {
+            const attempts = [
+                // 1. 手機優先：前鏡頭 + 理想解析度/幀率
+                { video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } }, audio: false },
+                // 2. 筆電/桌機：不指定 facingMode，只給理想解析度/幀率
+                { video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } }, audio: false },
+                // 3. 最寬鬆：什麼限制都不加，交給瀏覽器自己決定
+                { video: true, audio: false }
+            ];
+
+            let lastErr = null;
+            for (const constraints of attempts) {
+                try {
+                    return await navigator.mediaDevices.getUserMedia(constraints);
+                } catch (err) {
+                    lastErr = err;
+                    console.warn("攝影機限制條件失敗，嘗試下一組:", constraints, err.name, err.message);
+                }
+            }
+            throw lastErr;
         }
 
         function startTimer() {
