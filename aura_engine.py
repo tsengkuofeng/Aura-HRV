@@ -4,12 +4,6 @@ from scipy.interpolate import CubicSpline
 import json
 import traceback
 
-# 重新取樣後統一使用的標準取樣率。真實攝影機擷取間隔會因裝置效能、
-# 對焦/曝光鎖定、運動(騎車)等因素而抖動，若直接假設固定 fps 反推 BPM，
-# 只要真實幀率偏離設定值 X%，算出來的心率就會系統性偏差 X%。
-# 這是先前「心跳非常不准」最可能的主因之一。
-TARGET_FPS = 30.0
-
 
 class WebProfileManager:
     def __init__(self):
@@ -22,7 +16,7 @@ class WebProfileManager:
         p = self.profiles.get(self.current_user)
         if not p or not p.get("trained", False): return
 
-        # 保留原本的學習邏輯供歷史紀錄使用，但在最新的 POS 算法中不再強依賴它
+        # 保留原本的學習邏輯供歷史紀錄使用，但在最新的 CHROM 算法中不再強依賴它
         opt_R = r_mean / g_mean if g_mean > 0 else 3.0
         opt_R = max(2.5, min(3.5, opt_R))
         p["c_R"] = (p["c_R"] * 0.99) + (opt_R * 0.01)
@@ -44,7 +38,7 @@ def export_profiles():
     return json.dumps(engine.profiles)
 
 
-def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_training, is_training_active):
+def process_data_from_js(rgb_data, fps, polar_bpm, profile_name, is_training, is_training_active):
     try:
         # 切換使用者時，自動清空歷史穩定緩衝區
         if engine.current_user != profile_name:
@@ -53,65 +47,36 @@ def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_
 
         if hasattr(rgb_data, 'to_py'):
             rgb_data = rgb_data.to_py()
-        if hasattr(timestamps, 'to_py'):
-            timestamps = timestamps.to_py()
-
         buffer = np.asarray(rgb_data, dtype=np.float64).reshape(-1, 3)
 
         if len(buffer) < 150:
             return {"bpm": 0, "rmssd": 0, "sdnn": 0, "error": "緩衝資料不足", "peaks": 0}
 
-        # ====================================================================
-        # [修正 1] 以真實 timestamp 重新取樣到均勻時間網格，修正幀率漂移
-        # ====================================================================
-        real_fps = fps
-        ts = None
-        if timestamps is not None:
-            try:
-                ts = np.asarray(timestamps, dtype=np.float64)
-            except Exception:
-                ts = None
-
-        if ts is not None and len(ts) == len(buffer) and ts[-1] > ts[0]:
-            t_raw = (ts - ts[0]) / 1000.0  # ms -> s
-            duration = t_raw[-1]
-            real_fps = (len(ts) - 1) / duration if duration > 0 else fps
-
-            n_uniform = max(int(duration * TARGET_FPS), 150)
-            t_uniform = np.linspace(0, duration, n_uniform)
-
-            R = np.interp(t_uniform, t_raw, buffer[:, 0])
-            G = np.interp(t_uniform, t_raw, buffer[:, 1])
-            B = np.interp(t_uniform, t_raw, buffer[:, 2])
-            fps = TARGET_FPS
-        else:
-            # 沒有 timestamp 資料時，退回舊行為 (向下相容)
-            R, G, B = buffer[:, 0], buffer[:, 1], buffer[:, 2]
+        R, G, B = buffer[:, 0], buffer[:, 1], buffer[:, 2]
 
         if np.mean(G) < 1:
             return {"bpm": 0, "rmssd": 0, "sdnn": 0, "error": "影像全黑 (請檢查光線)", "peaks": 0}
 
         # ====================================================================
-        # [修正 2] CHROM -> POS 演算法
-        # Wang, W., den Brinker, A.C., Stuijk, S., de Haan, G. (2017)
-        # "Algorithmic Principles of Remote-PPG", IEEE Trans. Biomed. Eng.
-        # DOI: 10.1109/TBME.2016.2609282
-        # POS 對運動雜訊(騎車、晃動)的穩健性優於 CHROM，是目前 rPPG 文獻
-        # (pyVHR / rPPG-Toolbox 皆有收錄) 公認最穩健的傳統訊號方法之一。
+        # [核心升級] 標準 CHROM 算法 (Chrominance-based method)
         # ====================================================================
+        # 1. 單位化 (Normalization) - 抵抗環境光與騎車時的明暗閃爍
         mean_R, mean_G, mean_B = np.mean(R), np.mean(G), np.mean(B)
         Rn = R / mean_R if mean_R > 0 else R
         Gn = G / mean_G if mean_G > 0 else G
         Bn = B / mean_B if mean_B > 0 else B
 
-        S1 = Gn - Bn
-        S2 = -2 * Rn + Gn + Bn
+        # 2. 投影到 X 和 Y 色度空間
+        Xcomp = 3 * Rn - 2 * Gn
+        Ycomp = 1.5 * Rn + Gn - 1.5 * Bn
 
-        std_S2 = np.std(S2)
-        if std_S2 == 0: std_S2 = 1e-6
-        alpha = np.std(S1) / std_S2
+        # 3. 動態計算自適應權重 Alpha (即時把運動造成的雜訊扣除)
+        std_Y = np.std(Ycomp)
+        if std_Y == 0: std_Y = 1e-6
+        alpha = np.std(Xcomp) / std_Y
 
-        bvp = signal.detrend(S1 + alpha * S2)
+        # 4. 合成脈搏訊號並去趨勢
+        bvp = signal.detrend(Xcomp - alpha * Ycomp)
         # ====================================================================
 
         # 帶通濾波 (Bandpass)：收窄至 45~150 BPM
@@ -132,29 +97,6 @@ def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_
         b, a = signal.butter(4, [low_cut, high_cut], btype='band')
         f_bvp = signal.filtfilt(b, a, bvp)
 
-        # ====================================================================
-        # [修正 3] 訊噪比(SNR)品質門檻：頻譜能量若不集中在合理心率頻段附近，
-        # 代表訊號被運動/光線雜訊淹沒，此時寧可不輸出，也不要顯示一個
-        # 看似自信但其實錯誤的 BPM 數字。
-        # ====================================================================
-        snr_ok = True
-        try:
-            freqs, psd = signal.periodogram(f_bvp, fs=fps)
-            band_mask = (freqs >= 0.75) & (freqs <= 2.5)
-            if np.any(band_mask) and np.sum(psd[band_mask]) > 0:
-                band_freqs = freqs[band_mask]
-                band_psd = psd[band_mask]
-                peak_freq = band_freqs[np.argmax(band_psd)]
-                signal_mask = np.abs(band_freqs - peak_freq) <= 0.1
-                signal_power = np.sum(band_psd[signal_mask])
-                total_power = np.sum(band_psd)
-                snr = signal_power / total_power if total_power > 0 else 0
-                snr_ok = snr >= 0.25
-            else:
-                snr_ok = False
-        except Exception:
-            snr_ok = True  # SNR 檢查本身失敗時不擋主流程，避免引入新的錯誤來源
-
         # 亞像素波峰分析 (Cubic Spline Interpolation) 上採樣至 120fps
         interp_factor = 4
         new_fps = fps * interp_factor
@@ -167,13 +109,6 @@ def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_
         prominence_val = max(np.std(f_bvp_interp) * 0.15, 1e-5)
         peaks, _ = signal.find_peaks(f_bvp_interp, distance=peak_dist_interp, prominence=prominence_val)
 
-        if len(peaks) >= 4 and not snr_ok:
-            return {
-                "bpm": 0, "rmssd": 0, "sdnn": 0,
-                "error": "訊號雜訊過高，請保持穩定並確保光線充足",
-                "peaks": len(peaks), "real_fps": round(real_fps, 1)
-            }
-
         bpm, rmssd, sdnn = 0, 0, 0
         if len(peaks) >= 4:
             # 計算 RR 間期 (ms)
@@ -183,7 +118,7 @@ def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_
             valid_rr = rr[(rr >= 400) & (rr <= 1500)]
 
             if len(valid_rr) >= 3:
-                # 剔除相鄰跳變超過 20% 的假波峰 (防運動雜訊)
+                # [新增防呆機制] 剔除相鄰跳變超過 20% 的假波峰 (防運動雜訊)
                 rel_diff = np.abs(np.diff(valid_rr)) / valid_rr[:-1]
                 mask = np.insert(rel_diff < 0.20, 0, True)
                 valid_rr = valid_rr[mask]
@@ -191,24 +126,11 @@ def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_
                 if len(valid_rr) >= 2:
                     raw_bpm = 60000.0 / np.median(valid_rr)
 
-                    # ========================================================
-                    # [修正 4] 生理連續性檢查：心率不可能在 1 秒內大幅跳變，
-                    # 若與近期中位數差距過大，視為離群值，不採用該次讀值，
-                    # 避免單一雜訊窗口把顯示的 BPM 拉歪。
-                    # ========================================================
-                    accept = True
-                    if len(engine.bpm_history) >= 3:
-                        recent_median = np.median(engine.bpm_history)
-                        if recent_median > 0 and abs(raw_bpm - recent_median) / recent_median > 0.25:
-                            accept = False
-
-                    if accept:
-                        engine.bpm_history.append(raw_bpm)
-                        if len(engine.bpm_history) > 5:
-                            engine.bpm_history.pop(0)
-
-                    if engine.bpm_history:
-                        bpm = np.median(engine.bpm_history)
+                    # 輸出穩定化：取最近 5 次的 BPM 中位數
+                    engine.bpm_history.append(raw_bpm)
+                    if len(engine.bpm_history) > 5:
+                        engine.bpm_history.pop(0)
+                    bpm = np.median(engine.bpm_history)
 
                     if len(valid_rr) > 2:
                         diff_rr = np.abs(np.diff(valid_rr))
@@ -226,8 +148,7 @@ def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_
             "rmssd": round(rmssd, 1),
             "sdnn": round(sdnn, 1),
             "error": "",
-            "peaks": len(peaks),
-            "real_fps": round(real_fps, 1)
+            "peaks": len(peaks)
         }
     except Exception as e:
         return {"bpm": 0, "rmssd": 0, "sdnn": 0, "error": str(traceback.format_exc()), "peaks": 0}

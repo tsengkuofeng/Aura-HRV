@@ -83,8 +83,7 @@
                 <p>
                     • <a href="https://doi.org/10.1016/j.bspc.2024.107158" target="_blank">DOI: 10.1016/j.bspc.2024.107158</a><br>
                     • <a href="https://doi.org/10.7717/peerj-cs.929" target="_blank">DOI: 10.7717/peerj-cs.929</a><br>
-                    • <a href="https://doi.org/10.1109/access.2020.3040936" target="_blank">DOI: 10.1109/access.2020.3040936</a><br>
-                    • POS 演算法 (Wang et al., 2017) <a href="https://doi.org/10.1109/TBME.2016.2609282" target="_blank">DOI: 10.1109/TBME.2016.2609282</a>
+                    • <a href="https://doi.org/10.1109/access.2020.3040936" target="_blank">DOI: 10.1109/access.2020.3040936</a>
                 </p>
 
                 <h4>【授權條款 GPL-3.0】</h4>
@@ -177,7 +176,7 @@
 
         <div class="stats-grid">
             <div class="stat-box">AI BPM<span id="ai-bpm" class="stat-val" style="font-size: 1.4em;">--</span></div>
-            <div class="stat-box">Buffer<span id="ai-buffer" class="stat-val" style="color:#aaa; font-size: 1.2em;">0 / 300</span><div id="ai-fps" style="font-size:0.7em;color:#666;margin-top:4px;">實際FPS: --</div></div>
+            <div class="stat-box">Buffer<span id="ai-buffer" class="stat-val" style="color:#aaa; font-size: 1.2em;">0 / 300</span></div>
             <div class="stat-box">RMSSD<span id="ai-rmssd" class="stat-val" style="color: orange;">--</span></div>
             <div class="stat-box">SDNN<span id="ai-sdnn" class="stat-val" style="color: #0077ff;">--</span></div>
         </div>
@@ -246,7 +245,6 @@
         let pyProcessData, pySyncProfiles, pyExportProfiles;
 
         let rgbBuffer = [];
-        let tsBuffer = []; // 【新增】對應每一筆 rgbBuffer 的真實擷取時間 (performance.now, ms)，用來修正 fps 假設誤差
         let polarBpm = 0;
         let isTrainingMode = false;
         let currentProfile = "Public Mode";
@@ -264,8 +262,6 @@
         // 【新增】平滑化用的 ROI 變數，防止框框亂跳
         let smoothedFaceROI = null;
         let smoothedForeheadROI = null;
-        let smoothedLeftCheekROI = null;   // 【新增】左臉頰 ROI (多區域取樣，提升訊噪比)
-        let smoothedRightCheekROI = null;  // 【新增】右臉頰 ROI
 
         let frameCount = 0;
         let isDetectingFace = false;
@@ -289,19 +285,14 @@
             if(trainTimer) clearInterval(trainTimer);
             isTrainingActive = false;
             rgbBuffer = [];
-            tsBuffer = [];
             document.getElementById('ai-buffer').innerText = `0 / 300`;
             document.getElementById('ai-bpm').innerText = "--";
             document.getElementById('ai-rmssd').innerText = "--";
             document.getElementById('ai-sdnn').innerText = "--";
-            const fpsEl = document.getElementById('ai-fps');
-            if (fpsEl) fpsEl.innerText = "實際FPS: --";
 
             // 清理畫布與追蹤框記憶
             smoothedFaceROI = null;
             smoothedForeheadROI = null;
-            smoothedLeftCheekROI = null;
-            smoothedRightCheekROI = null;
             const overlay = document.getElementById('canvas-overlay');
             const octx = overlay.getContext('2d');
             octx.clearRect(0, 0, overlay.width, overlay.height);
@@ -440,56 +431,31 @@
             switchScreen('screen-dashboard');
 
             try {
-                // 【修正】移除先前無實際作用的 manual exposure/focus/whiteBalance 進階限制：
-                // 大多數瀏覽器/攝影機在沒有同時給定 exposureCompensation 等實際數值時，
-                // 會直接忽略這組 advanced 限制，等於沒有真的關閉自動曝光(AGC)，
-                // 反而讓人誤以為雜訊已被抑制。目前雜訊抑制改依賴訊號端的正規化
-                // (POS 演算法的時間平均正規化) 與新增的 SNR 品質門檻來處理。
-                //
-                // 【新增】筆電/桌機相容：手機上需要 facingMode:"user" 才會拿到前鏡頭，
-                // 但一般筆電/桌機的鏡頭沒有「前後鏡頭」概念，某些瀏覽器/驅動組合在指定
-                // facingMode 時反而會回報「找不到裝置」(NotFoundError)。這裡改成依序嘗試
-                // 由嚴格到寬鬆的限制條件，只要其中一組成功就繼續，讓同一份程式碼在手機、
-                // 筆電、桌機外接攝影機都測得起來。
-                mediaStream = await getCameraStreamWithFallback();
+                // 【核心升級】加入強制手動對焦/曝光參數 (嘗試抑制手機的自動跳光干擾)
+                const constraints = {
+                    video: {
+                        facingMode: "user",
+                        width: { ideal: 640 },
+                        height: { ideal: 480 },
+                        frameRate: { ideal: 30 },
+                        advanced: [{ exposureMode: "manual", focusMode: "manual", whiteBalanceMode: "manual" }]
+                    },
+                    audio: false
+                };
+
+                mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
                 const video = document.getElementById('webcam');
                 video.srcObject = mediaStream;
                 video.play();
 
                 rgbBuffer = [];
-                tsBuffer = [];
                 smoothedFaceROI = null;
                 smoothedForeheadROI = null;
-                smoothedLeftCheekROI = null;
-                smoothedRightCheekROI = null;
                 requestAnimationFrame(processFrame);
             } catch (err) {
-                alert("無法存取攝影機：" + err.message + "\n\n請確認：\n1. 這台裝置有可用的攝影機\n2. 瀏覽器已取得攝影機權限（網址列旁的鎖頭圖示可查看）\n3. 沒有其他程式正在佔用攝影機");
+                alert("無法存取攝影機：" + err.message);
                 goHome();
             }
-        }
-
-        // 【新增】依序嘗試多組 getUserMedia 限制條件，兼容手機前鏡頭與筆電/桌機一般鏡頭
-        async function getCameraStreamWithFallback() {
-            const attempts = [
-                // 1. 手機優先：前鏡頭 + 理想解析度/幀率
-                { video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } }, audio: false },
-                // 2. 筆電/桌機：不指定 facingMode，只給理想解析度/幀率
-                { video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } }, audio: false },
-                // 3. 最寬鬆：什麼限制都不加，交給瀏覽器自己決定
-                { video: true, audio: false }
-            ];
-
-            let lastErr = null;
-            for (const constraints of attempts) {
-                try {
-                    return await navigator.mediaDevices.getUserMedia(constraints);
-                } catch (err) {
-                    lastErr = err;
-                    console.warn("攝影機限制條件失敗，嘗試下一組:", constraints, err.name, err.message);
-                }
-            }
-            throw lastErr;
         }
 
         function startTimer() {
@@ -585,27 +551,10 @@
                     h: height * 0.15           // 縮減高度，只保留最乾淨的額頭中心
                 };
 
-                // 【新增】左右臉頰 ROI：與額頭一起加權平均取樣，增加取樣面積、
-                // 提升訊噪比 (SNR)，也降低單一小區塊被瀏海/口罩/運動遮擋時整體失效的風險。
-                let newLeftCheekROI = {
-                    x: xMin + width * 0.08,
-                    y: yMin + height * 0.55,
-                    w: width * 0.22,
-                    h: height * 0.20
-                };
-                let newRightCheekROI = {
-                    x: xMin + width * 0.70,
-                    y: yMin + height * 0.55,
-                    w: width * 0.22,
-                    h: height * 0.20
-                };
-
                 // [修改] 解決框框閃爍問題：加入平滑化 (EMA 濾波)
                 if (!smoothedFaceROI) {
                     smoothedFaceROI = newFaceROI;
                     smoothedForeheadROI = newForeheadROI;
-                    smoothedLeftCheekROI = newLeftCheekROI;
-                    smoothedRightCheekROI = newRightCheekROI;
                 } else {
                     const alpha = 0.15; // 平滑係數，越小越穩定但不跟手，0.15是適中數值
 
@@ -618,44 +567,7 @@
                     smoothedForeheadROI.y = smoothedForeheadROI.y * (1 - alpha) + newForeheadROI.y * alpha;
                     smoothedForeheadROI.w = smoothedForeheadROI.w * (1 - alpha) + newForeheadROI.w * alpha;
                     smoothedForeheadROI.h = smoothedForeheadROI.h * (1 - alpha) + newForeheadROI.h * alpha;
-
-                    smoothedLeftCheekROI.x = smoothedLeftCheekROI.x * (1 - alpha) + newLeftCheekROI.x * alpha;
-                    smoothedLeftCheekROI.y = smoothedLeftCheekROI.y * (1 - alpha) + newLeftCheekROI.y * alpha;
-                    smoothedLeftCheekROI.w = smoothedLeftCheekROI.w * (1 - alpha) + newLeftCheekROI.w * alpha;
-                    smoothedLeftCheekROI.h = smoothedLeftCheekROI.h * (1 - alpha) + newLeftCheekROI.h * alpha;
-
-                    smoothedRightCheekROI.x = smoothedRightCheekROI.x * (1 - alpha) + newRightCheekROI.x * alpha;
-                    smoothedRightCheekROI.y = smoothedRightCheekROI.y * (1 - alpha) + newRightCheekROI.y * alpha;
-                    smoothedRightCheekROI.w = smoothedRightCheekROI.w * (1 - alpha) + newRightCheekROI.w * alpha;
-                    smoothedRightCheekROI.h = smoothedRightCheekROI.h * (1 - alpha) + newRightCheekROI.h * alpha;
                 }
-            }
-        }
-
-        // 【新增】從指定 ROI (常規化座標 0~1) 取出畫面像素平均值，取不到就回傳 null
-        function sampleROI(ctx, canvasW, canvasH, roi) {
-            if (!roi) return null;
-            let rx = Math.floor(roi.x * canvasW);
-            let ry = Math.floor(roi.y * canvasH);
-            let rw = Math.floor(roi.w * canvasW);
-            let rh = Math.floor(roi.h * canvasH);
-
-            rx = Math.max(0, rx); ry = Math.max(0, ry);
-            rw = Math.min(canvasW - rx, rw); rh = Math.min(canvasH - ry, rh);
-
-            if (rw <= 0 || rh <= 0 || isNaN(rx) || isNaN(ry)) return null;
-
-            try {
-                const data = ctx.getImageData(rx, ry, rw, rh).data;
-                let r = 0, g = 0, b = 0, count = 0;
-                for (let i = 0; i < data.length; i += 4) {
-                    r += data[i]; g += data[i + 1]; b += data[i + 2];
-                    count++;
-                }
-                if (count === 0) return null;
-                return { r: r / count, g: g / count, b: b / count };
-            } catch (e) {
-                return null;
             }
         }
 
@@ -720,44 +632,30 @@
                     octx.lineWidth = 2;
                     octx.strokeRect(drawFhX, drawFhY, drawFhW, drawFhH);
 
-                    // 3. 【新增】畫出左右臉頰的青色小框 (多 ROI 取樣視覺回饋)
-                    if (smoothedLeftCheekROI && smoothedRightCheekROI) {
-                        octx.strokeStyle = 'rgba(0, 200, 255, 0.7)';
-                        octx.lineWidth = 2;
-                        let drawLcX = (1 - (smoothedLeftCheekROI.x + smoothedLeftCheekROI.w)) * overlay.width;
-                        let drawLcY = smoothedLeftCheekROI.y * overlay.height;
-                        let drawLcW = smoothedLeftCheekROI.w * overlay.width;
-                        let drawLcH = smoothedLeftCheekROI.h * overlay.height;
-                        octx.strokeRect(drawLcX, drawLcY, drawLcW, drawLcH);
+                    // 擷取像素 (不反轉，用原始攝影機畫布位置)
+                    let rx = Math.floor(smoothedForeheadROI.x * canvas.width);
+                    let ry = Math.floor(smoothedForeheadROI.y * canvas.height);
+                    let rw = Math.floor(smoothedForeheadROI.w * canvas.width);
+                    let rh = Math.floor(smoothedForeheadROI.h * canvas.height);
 
-                        let drawRcX = (1 - (smoothedRightCheekROI.x + smoothedRightCheekROI.w)) * overlay.width;
-                        let drawRcY = smoothedRightCheekROI.y * overlay.height;
-                        let drawRcW = smoothedRightCheekROI.w * overlay.width;
-                        let drawRcH = smoothedRightCheekROI.h * overlay.height;
-                        octx.strokeRect(drawRcX, drawRcY, drawRcW, drawRcH);
+                    rx = Math.max(0, rx); ry = Math.max(0, ry);
+                    rw = Math.min(canvas.width - rx, rw); rh = Math.min(canvas.height - ry, rh);
+
+                    if (rw > 0 && rh > 0 && !isNaN(rx) && !isNaN(ry)) {
+                        try {
+                            const frameData = ctx.getImageData(rx, ry, rw, rh).data;
+                            let r=0, g=0, b=0, count=0;
+                            for(let i=0; i<frameData.length; i+=4) {
+                                r += frameData[i]; g += frameData[i+1]; b += frameData[i+2];
+                                count++;
+                            }
+                            if(count > 0) rgbBuffer.push([r/count, g/count, b/count]);
+                        } catch (e) {
+                            console.error("影像擷取錯誤:", e);
+                        }
                     }
 
-                    // 【修改】多 ROI 加權平均取樣：額頭(權重2) + 左右臉頰(各權重1)，
-                    // 沒取到的 ROI 自動排除、權重重新分配，避免單一區塊被遮擋時整段訊號失效。
-                    const fh = sampleROI(ctx, canvas.width, canvas.height, smoothedForeheadROI);
-                    const lc = sampleROI(ctx, canvas.width, canvas.height, smoothedLeftCheekROI);
-                    const rc = sampleROI(ctx, canvas.width, canvas.height, smoothedRightCheekROI);
-
-                    const samples = [];
-                    if (fh) samples.push({ ...fh, weight: 2 });
-                    if (lc) samples.push({ ...lc, weight: 1 });
-                    if (rc) samples.push({ ...rc, weight: 1 });
-
-                    if (samples.length > 0) {
-                        const totalW = samples.reduce((s, v) => s + v.weight, 0);
-                        const r = samples.reduce((s, v) => s + v.r * v.weight, 0) / totalW;
-                        const g = samples.reduce((s, v) => s + v.g * v.weight, 0) / totalW;
-                        const b = samples.reduce((s, v) => s + v.b * v.weight, 0) / totalW;
-                        rgbBuffer.push([r, g, b]);
-                        tsBuffer.push(now); // 【新增】記錄這筆樣本的真實擷取時間
-                    }
-
-                    // 4. 在人臉框的旁邊畫出微型純紅波形
+                    // 3. 在人臉框的旁邊畫出微型純紅波形
                     if (rgbBuffer.length > 10) {
                         const waveW = 60;
                         const waveH = 40;
@@ -800,27 +698,21 @@
 
                 if (rgbBuffer.length > 300) {
                     rgbBuffer.shift();
-                    tsBuffer.shift(); // 【新增】與 rgbBuffer 同步淘汰，確保兩個陣列長度永遠一致
                 }
 
                 if (rgbBuffer.length > 150 && frameCount % 30 === 0) {
                     try {
                         const flatData = Float64Array.from(rgbBuffer.flat());
-                        const tsData = Float64Array.from(tsBuffer); // 【新增】真實時間戳，交給 Python 端做均勻重取樣
-                        const result = pyProcessData(flatData, tsData, 30.0, polarBpm, currentProfile, isTrainingMode, isTrainingActive).toJs();
+                        const result = pyProcessData(flatData, 30.0, polarBpm, currentProfile, isTrainingMode, isTrainingActive).toJs();
 
                         let outBpm = result.get ? result.get('bpm') : result.bpm;
                         let outRmssd = result.get ? result.get('rmssd') : result.rmssd;
                         let outSdnn = result.get ? result.get('sdnn') : result.sdnn;
                         let outErr = result.get ? result.get('error') : result.error;
                         let outPeaks = result.get ? result.get('peaks') : result.peaks;
-                        let outRealFps = result.get ? result.get('real_fps') : result.real_fps;
-
-                        const fpsEl = document.getElementById('ai-fps');
-                        if (fpsEl && outRealFps) fpsEl.innerText = `實際FPS: ${outRealFps}`;
 
                         if (outErr && outErr !== "") {
-                            hintElement.innerText = "⚠️ " + outErr.substring(0, 20);
+                            hintElement.innerText = "⚠️ 錯誤: " + outErr.substring(0, 15);
                             hintElement.style.color = "#ff4d4d";
                         } else if (outBpm > 0) {
                             document.getElementById('ai-bpm').innerText = outBpm;
