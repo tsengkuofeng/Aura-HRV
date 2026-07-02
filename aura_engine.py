@@ -1,5 +1,6 @@
 import numpy as np
-from scipy import signal
+from scipy import signal, sparse
+from scipy.sparse.linalg import spsolve
 from scipy.interpolate import CubicSpline
 import json
 import traceback
@@ -9,6 +10,29 @@ import traceback
 # 只要真實幀率偏離設定值 X%，算出來的心率就會系統性偏差 X%。
 # 這是先前「心跳非常不准」最可能的主因之一。
 TARGET_FPS = 30.0
+
+# Tarvainen 平滑先驗法(smoothness priors)去趨勢的正則化強度。
+# 數值越大，被視為「趨勢」的曲線越平滑，保留下來的訊號頻段越寬；
+# 用合成訊號測過 10~20 之間 SNR 表現最好，取 15 當折衷值。
+DETREND_LAMBDA = 15.0
+
+
+def smoothness_priors_detrend(z):
+    """Tarvainen, Ranta-Aho, Karjalainen (2002) 平滑先驗法去趨勢。
+    比原本單純的線性 detrend 更能處理非線性的慢速漂移(如緩慢光線變化)，
+    同時保留心率頻段的訊號。樣本數太少時退回線性 detrend。"""
+    n = len(z)
+    if n < 6:
+        return signal.detrend(z)
+    try:
+        D = sparse.diags([1, -2, 1], [0, 1, 2], shape=(n - 2, n))
+        I = sparse.eye(n)
+        A = (I + (DETREND_LAMBDA ** 2) * (D.T @ D)).tocsc()
+        trend = spsolve(A, z)
+        return z - trend
+    except Exception:
+        # 求解失敗時(理論上不太會發生)安全退回線性 detrend，不讓主流程崩潰
+        return signal.detrend(z)
 
 
 class WebProfileManager:
@@ -115,7 +139,9 @@ def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_
         if std_S2 == 0: std_S2 = 1e-6
         alpha = np.std(S1) / std_S2
 
-        bvp = signal.detrend(S1 + alpha * S2)
+        # 改用 Tarvainen 平滑先驗法取代原本單純的線性 detrend，對非線性的
+        # 慢速漂移(如緩慢光線變化、非等速的微幅晃動)處理較細緻。
+        bvp = smoothness_priors_detrend(S1 + alpha * S2)
         # ====================================================================
 
         # 帶通濾波 (Bandpass)：收窄至 45~150 BPM
@@ -142,13 +168,14 @@ def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_
         # 看似自信但其實錯誤的 BPM 數字。
         # ====================================================================
         snr_ok = True
+        peak_freq = 0.0
         try:
             freqs, psd = signal.periodogram(f_bvp, fs=fps)
             band_mask = (freqs >= 0.75) & (freqs <= 2.5)
             if np.any(band_mask) and np.sum(psd[band_mask]) > 0:
                 band_freqs = freqs[band_mask]
                 band_psd = psd[band_mask]
-                peak_freq = band_freqs[np.argmax(band_psd)]
+                peak_freq = float(band_freqs[np.argmax(band_psd)])
                 signal_mask = np.abs(band_freqs - peak_freq) <= 0.1
                 signal_power = np.sum(band_psd[signal_mask])
                 total_power = np.sum(band_psd)
@@ -194,6 +221,22 @@ def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_
 
                 if len(valid_rr) >= 2:
                     raw_bpm = 60000.0 / np.median(valid_rr)
+                    fft_bpm = peak_freq * 60.0
+
+                    # ========================================================
+                    # [修正 5] 時域波峰計數 vs 頻譜(FFT)主頻率交叉驗證：
+                    # 時域波峰計數在雜訊環境下，容易「穩定地」收斂到一個諧波
+                    # 相關但錯誤的頻率(可能偏高、也可能偏低)——數值不會亂飄，
+                    # 但就是不準。頻譜分析是對整個時間窗口做能量積分，較不受
+                    # 少數幾個誤判/漏抓的波峰影響，拿來當交叉驗證基準較穩健。
+                    # 兩者差距過大時：改採頻譜估計值，且不信任這次的波峰時間
+                    # 點 -> 不拿來計算 HRV，避免把雜訊誤判成漂亮的 RMSSD/SDNN
+                    # (這正是「明明很累，數值卻超好」的成因)。
+                    # ========================================================
+                    rr_reliable = True
+                    if fft_bpm > 0 and abs(raw_bpm - fft_bpm) / fft_bpm > 0.12:
+                        raw_bpm = fft_bpm
+                        rr_reliable = False
 
                     # ========================================================
                     # [修正 4-v2] 生理連續性檢查（原版有嚴重 bug，現已修正）：
@@ -234,7 +277,10 @@ def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_
                     if engine.bpm_history:
                         bpm = np.median(engine.bpm_history)
 
-                    if len(valid_rr) > 2:
+                    # HRV(RMSSD/SDNN) 只在這次的波峰時間點通過交叉驗證(rr_reliable)
+                    # 時才計算，否則寧可顯示 0，也不要用不可信的波峰數據算出一個
+                    # 看似漂亮、實際上只是雜訊的 HRV 數字。
+                    if rr_reliable and len(valid_rr) > 2:
                         diff_rr = np.abs(np.diff(valid_rr))
                         # RMSSD 二次防爆：超過 150ms 的跳動強制忽略
                         clean_diffs = diff_rr[diff_rr < 150]
@@ -242,8 +288,7 @@ def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_
                             rmssd = np.sqrt(np.mean(clean_diffs ** 2))
                         else:
                             rmssd = 0
-
-                    sdnn = np.std(valid_rr)
+                        sdnn = np.std(valid_rr)
 
         return {
             "bpm": round(bpm, 1),
