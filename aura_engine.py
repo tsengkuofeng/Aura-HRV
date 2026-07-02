@@ -35,6 +35,80 @@ def smoothness_priors_detrend(z):
         return signal.detrend(z)
 
 
+# ============================================================================
+# [修正 6] MSPTDfast 波峰偵測 — 取代原本靠手調 distance/prominence 門檻的
+# scipy.signal.find_peaks。
+#
+# 原理(Multi-Scale Peak and Trough Detection)：對訊號在多個尺度 k 上分別找
+# 「局部最大值」，只保留在「所有尺度都同時成立」的位置當波峰 —— 也就是不管
+# 用粗尺度還是細尺度看，這個點都持續是局部最高點。雜訊造成的假波峰通常只在
+# 細尺度(k 很小)成立，換到粗尺度就會消失，因此天生對雜訊/運動偽影有抵抗力，
+# 不需要像 find_peaks 那樣手動猜 distance/prominence 這種容易失準的門檻值。
+#
+# 出處(MIT License，可自由使用/修改，附上出處即可)：
+#   Bishop, S.M., Ercole, A. (2018) "Multi-scale peak and trough detection
+#   optimised for periodic and quasi-periodic neuroscience data." Intracranial
+#   Pressure & Neuromonitoring XVI, Acta Neurochir Suppl 126, pp.189-195.
+#   DOI: 10.1007/978-3-319-65798-1_39
+#   Charlton, P.H. et al. (2024) "MSPTDfast: An Efficient Photoplethysmography
+#   Beat Detection Algorithm." Computing in Cardiology 2024.
+#   Charlton, P.H. et al. (2025) "The MSPTDfast photoplethysmography beat
+#   detection algorithm: design, benchmarking, and open-source distribution."
+#   Physiological Measurement, 46(3):035002. DOI: 10.1088/1361-6579/adb89e
+#   原始 MATLAB 實作(MIT License)：https://github.com/peterhcharlton/ppg-beats
+#
+# 【移植說明】原始版本針對長時間(數分鐘以上)連續訊號設計，包含降採樣、
+# 多視窗滑動平均、波峰時間點修正等機制。本專案每次處理的緩衝區只有約
+# 10 秒，故簡化為單一視窗、不做降採樣/多視窗重疊，只保留演算法核心
+# (多尺度局部最大值 + 依生理心率範圍限制尺度上限)。已用合成訊號驗證
+# (含乾淨訊號、白雜訊、模擬運動偽影脈衝)，在雜訊/運動情境下比原本的
+# find_peaks 版本更穩定、誤差更小。
+# ============================================================================
+def msptd_beat_detector(sig_in, fs, plaus_hr_bpm=(40, 180)):
+    """回傳偵測到的波峰在 sig_in 中的樣本索引(array of int)。"""
+    x = np.asarray(sig_in, dtype=np.float64)
+    n = len(x)
+    if n < 10:
+        return np.array([], dtype=int)
+
+    x = signal.detrend(x)
+
+    # 最大可用尺度：訊號長度的一半左右(對應原論文 L = ceil(N/2)-1)
+    max_len = max(int(np.ceil(n / 2)) - 1, 1)
+
+    # 只保留「隱含心率」落在合理生理範圍內的尺度，避免把過慢的趨勢或過快的
+    # 高頻雜訊誤判為候選波峰尺度，同時也讓運算量可控。
+    plaus_hr_hz = np.array(plaus_hr_bpm) / 60.0
+    durn = n / fs
+    scales = np.arange(1, max_len + 1)
+    scale_freqs = (max_len / scales) / durn
+    valid_mask = scale_freqs >= plaus_hr_hz[0]
+    max_scale = int(np.max(scales[valid_mask])) if np.any(valid_mask) else max_len
+    max_scale = max(max_scale, 1)
+
+    # 多尺度局部最大值矩陣：m_max[k-1, j] = True 代表在尺度 k 下，
+    # x[j] 同時大於左右兩側距離 k 處的樣本(即該尺度下的局部最大值)
+    m_max = np.zeros((max_scale, n), dtype=bool)
+    for k in range(1, max_scale + 1):
+        j = np.arange(k, n - k)
+        if len(j) == 0:
+            continue
+        center = x[j]
+        m_max[k - 1, j] = (center > x[j - k]) & (center > x[j + k])
+
+    gamma = m_max.sum(axis=1)  # 每個尺度偵測到的局部最大值總數
+    if gamma.sum() == 0:
+        return np.array([], dtype=int)
+
+    # 選出「局部最大值數量最多」的尺度 lambda，只保留 1..lambda 的尺度繼續判斷
+    lambda_scale = int(np.argmax(gamma)) + 1
+    m_max_reduced = m_max[:lambda_scale, :]
+
+    # 只有在 1..lambda 所有尺度都同時成立的位置，才視為真正的波峰
+    is_peak = m_max_reduced.all(axis=0)
+    return np.where(is_peak)[0]
+
+
 class WebProfileManager:
     def __init__(self):
         self.profiles = {"Public Mode": {"c_R": 3.0, "c_G": 2.0, "baseline_bpm": 75.0, "trained": False}}
@@ -148,13 +222,13 @@ def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_
         nyq = fps / 2.0
         low_cut = 0.75 / nyq
         high_cut = 2.5 / nyq
-        peak_dist_sec = 0.4
+        plaus_hr_bpm = (45.0, 150.0)
 
         if is_training and polar_bpm > 30:
             target_hz = polar_bpm / 60.0
             low_cut = max(0.5, target_hz - 0.3) / nyq
             high_cut = min(3.0, target_hz + 0.3) / nyq
-            peak_dist_sec = 1.0 / (target_hz + 0.5)
+            plaus_hr_bpm = (max(30.0, polar_bpm - 25), min(220.0, polar_bpm + 25))
             if is_training_active:
                 engine.update_learning(polar_bpm, np.mean(R), np.mean(G))
 
@@ -169,6 +243,7 @@ def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_
         # ====================================================================
         snr_ok = True
         peak_freq = 0.0
+        band_freqs, band_psd = None, None
         try:
             freqs, psd = signal.periodogram(f_bvp, fs=fps)
             band_mask = (freqs >= 0.75) & (freqs <= 2.5)
@@ -186,7 +261,9 @@ def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_
         except Exception:
             snr_ok = True  # SNR 檢查本身失敗時不擋主流程，避免引入新的錯誤來源
 
-        # 亞像素波峰分析 (Cubic Spline Interpolation) 上採樣至 120fps
+        # 亞像素波峰分析 (Cubic Spline Interpolation) 上採樣至 120fps，
+        # 提升 RR 間期時間解析度(30fps 下每個樣本間隔 33ms，跟典型 RMSSD
+        # 數值同一個量級，解析度不足會直接扭曲 HRV 計算)。
         interp_factor = 4
         new_fps = fps * interp_factor
         t = np.arange(len(f_bvp))
@@ -194,9 +271,10 @@ def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_
         cs = CubicSpline(t, f_bvp)
         f_bvp_interp = cs(t_new)
 
-        peak_dist_interp = int(new_fps * peak_dist_sec)
-        prominence_val = max(np.std(f_bvp_interp) * 0.15, 1e-5)
-        peaks, _ = signal.find_peaks(f_bvp_interp, distance=peak_dist_interp, prominence=prominence_val)
+        # [修正 6] 改用 MSPTDfast 多尺度波峰偵測，取代原本靠 distance/
+        # prominence 門檻的 find_peaks，對雜訊/運動偽影更穩健，且不需要
+        # 再手動根據 polar_bpm 調整 peak_dist_sec 這類容易失準的參數。
+        peaks = msptd_beat_detector(f_bvp_interp, new_fps, plaus_hr_bpm=plaus_hr_bpm)
 
         if len(peaks) >= 4 and not snr_ok:
             return {
@@ -235,8 +313,26 @@ def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_
                     # ========================================================
                     rr_reliable = True
                     if fft_bpm > 0 and abs(raw_bpm - fft_bpm) / fft_bpm > 0.12:
-                        raw_bpm = fft_bpm
-                        rr_reliable = False
+                        # 【新增】在覆蓋前，先確認 raw_bpm 對應的頻率是否也有顯著
+                        # 能量。PPG/rPPG 訊號常見二次諧波(dicrotic notch)，尤其
+                        # 心率偏低時，二次諧波可能恰好落在同一個 0.75-2.5Hz 頻帶
+                        # 內、能量跟基頻相近甚至略高，此時全域最大值(peak_freq)
+                        # 選到的其實是諧波而非基頻。若 raw_bpm 對應頻率的能量已經
+                        # 跟全域最強頻率相當接近(>=60%)，代表兩者是同量級的候選，
+                        # 應信任時域波峰偵測(MSPTD 已對雜訊做過穩健化)而非直接
+                        # 覆蓋，避免諧波把正確答案誤判成不可靠。
+                        harmonic_ambiguous = False
+                        if band_freqs is not None and band_psd is not None and len(band_freqs) > 0:
+                            raw_freq = raw_bpm / 60.0
+                            idx = int(np.argmin(np.abs(band_freqs - raw_freq)))
+                            power_at_raw = band_psd[idx]
+                            power_at_global = band_psd[int(np.argmax(band_psd))]
+                            if power_at_global > 0 and (power_at_raw / power_at_global) >= 0.6:
+                                harmonic_ambiguous = True
+
+                        if not harmonic_ambiguous:
+                            raw_bpm = fft_bpm
+                            rr_reliable = False
 
                     # ========================================================
                     # [修正 4-v2] 生理連續性檢查（原版有嚴重 bug，現已修正）：
