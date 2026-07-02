@@ -17,6 +17,9 @@ class WebProfileManager:
         self.current_user = "Public Mode"
         # 用於穩定心跳輸出的中位數緩衝區
         self.bpm_history = []
+        # 【新增】待確認候選值：偵測「連續兩次讀值彼此一致但偏離舊歷史」時，
+        # 用來判斷這是心率真的變了，而不是單次雜訊
+        self.pending_candidate = None
 
     def update_learning(self, bpm_truth, r_mean, g_mean):
         p = self.profiles.get(self.current_user)
@@ -49,6 +52,7 @@ def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_
         # 切換使用者時，自動清空歷史穩定緩衝區
         if engine.current_user != profile_name:
             engine.bpm_history = []
+            engine.pending_candidate = None
             engine.current_user = profile_name
 
         if hasattr(rgb_data, 'to_py'):
@@ -192,20 +196,40 @@ def process_data_from_js(rgb_data, timestamps, fps, polar_bpm, profile_name, is_
                     raw_bpm = 60000.0 / np.median(valid_rr)
 
                     # ========================================================
-                    # [修正 4] 生理連續性檢查：心率不可能在 1 秒內大幅跳變，
-                    # 若與近期中位數差距過大，視為離群值，不採用該次讀值，
-                    # 避免單一雜訊窗口把顯示的 BPM 拉歪。
+                    # [修正 4-v2] 生理連續性檢查（原版有嚴重 bug，現已修正）：
+                    # 原本的邏輯是「與近期中位數差距超過 25% 就永久拒絕」，這會
+                    # 造成一旦第一批讀值剛好誤判過高/過低，之後即使訊號回到正確
+                    # 數值，也會被當成「離群值」永遠擋在外面 —— 這正是「BPM
+                    # 卡在一個穩定但錯誤的數字，不會飄也不會修正」的真正原因，
+                    # 已用模擬驗證重現並確認修好。
+                    #
+                    # 新邏輯：偏離超過 25% 時先不直接採用，而是記成「待確認候選」；
+                    # 如果下一次讀值跟這個候選彼此接近（代表不是單次雜訊，是訊號
+                    # 真的穩定變化了），才捨棄舊歷史、重新鎖定到新數值；如果只是
+                    # 單次亂跳、下次又跟舊歷史一致，就當雜訊丟掉，不影響顯示值。
                     # ========================================================
                     accept = True
+                    already_relocked = False
                     if len(engine.bpm_history) >= 3:
                         recent_median = np.median(engine.bpm_history)
                         if recent_median > 0 and abs(raw_bpm - recent_median) / recent_median > 0.25:
-                            accept = False
+                            if (engine.pending_candidate is not None and
+                                    abs(raw_bpm - engine.pending_candidate) / max(engine.pending_candidate, 1e-6) < 0.15):
+                                # 連續兩次新讀值彼此一致 -> 心率真的變了，捨棄舊歷史重新開始
+                                engine.bpm_history = [engine.pending_candidate, raw_bpm]
+                                engine.pending_candidate = None
+                                already_relocked = True
+                            else:
+                                engine.pending_candidate = raw_bpm
+                                accept = False
+                        else:
+                            engine.pending_candidate = None
 
-                    if accept:
+                    if accept and not already_relocked:
                         engine.bpm_history.append(raw_bpm)
-                        if len(engine.bpm_history) > 5:
-                            engine.bpm_history.pop(0)
+
+                    if len(engine.bpm_history) > 5:
+                        engine.bpm_history = engine.bpm_history[-5:]
 
                     if engine.bpm_history:
                         bpm = np.median(engine.bpm_history)
